@@ -22,7 +22,42 @@ type Bot struct {
 	logger *logging.MemoryLogger
 }
 
-func NewBot(cfgPath string) (*Bot, error) {
+type botOptions struct {
+	restrictTools          bool
+	toolAllowlist          []string
+	disableLegacyMigration bool
+}
+
+// BotOption configures a Bot at construction time.
+type BotOption func(*botOptions)
+
+// WithToolAllowlist restricts the Bot to tools with the given registered names.
+// Calling WithToolAllowlist with no names is an explicit default-deny policy.
+// Omitting the option preserves the unrestricted tool set for compatibility.
+func WithToolAllowlist(allowed ...string) BotOption {
+	allowlist := append([]string(nil), allowed...)
+	return func(options *botOptions) {
+		options.restrictTools = true
+		options.toolAllowlist = append([]string(nil), allowlist...)
+	}
+}
+
+// WithLegacySessionMigrationDisabled confines session reads to the configured
+// workspace and disables fallback imports from the user's legacy data root.
+func WithLegacySessionMigrationDisabled() BotOption {
+	return func(options *botOptions) {
+		options.disableLegacyMigration = true
+	}
+}
+
+func NewBot(cfgPath string, options ...BotOption) (*Bot, error) {
+	botOpts := botOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&botOpts)
+		}
+	}
+
 	// If cfgPath is empty, try to find it
 	if cfgPath == "" {
 		var err error
@@ -70,6 +105,7 @@ func NewBot(cfgPath string) (*Bot, error) {
 	}
 
 	sessMgr := session.NewManager()
+	sessMgr.DisableLegacyMigration = botOpts.disableLegacyMigration
 	ws, _ := paths.ExpandUser(cfg.Agents.Defaults.Workspace)
 	if ws != "" {
 		sessMgr.Workspace = ws
@@ -77,7 +113,11 @@ func NewBot(cfgPath string) (*Bot, error) {
 
 	logger := logging.NewMemoryLogger(1000)
 
-	a := agent.New(cfg, provider, sessMgr, model, logger)
+	agentOptions := make([]agent.Option, 0, 1)
+	if botOpts.restrictTools {
+		agentOptions = append(agentOptions, agent.WithToolAllowlist(botOpts.toolAllowlist))
+	}
+	a := agent.New(cfg, provider, sessMgr, model, logger, agentOptions...)
 
 	return &Bot{agent: a, logger: logger}, nil
 }
@@ -93,6 +133,14 @@ func (b *Bot) GetLogs() []logging.Entry {
 		return nil
 	}
 	return b.logger.GetEntries()
+}
+
+// ToolNames returns the effective registered tool names for policy auditing.
+func (b *Bot) ToolNames() []string {
+	if b.agent == nil || b.agent.Tools == nil {
+		return nil
+	}
+	return b.agent.Tools.ToolNames()
 }
 
 func (b *Bot) Chat(ctx context.Context, message string, sessionID string) (string, error) {
