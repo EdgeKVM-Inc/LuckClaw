@@ -27,7 +27,29 @@ type MCPToolWrapper struct {
 }
 
 func (t *MCPToolWrapper) Name() string {
-	return "mcp_" + t.ServerName + "_" + t.OriginalName
+	const maxProviderFunctionNameBytes = 64
+	raw := "mcp_" + t.ServerName + "_" + t.OriginalName
+	var safe strings.Builder
+	safe.Grow(min(len(raw), maxProviderFunctionNameBytes))
+	for index := 0; index < len(raw) && safe.Len() < maxProviderFunctionNameBytes; index++ {
+		value := raw[index]
+		if value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z' ||
+			value >= '0' && value <= '9' || value == '_' || value == '-' {
+			safe.WriteByte(value)
+		} else {
+			safe.WriteByte('_')
+		}
+	}
+	return safe.String()
+}
+
+func claimMCPWrapperName(seen map[string]string, wrapper *MCPToolWrapper) error {
+	name := wrapper.Name()
+	if previous, exists := seen[name]; exists {
+		return fmt.Errorf("MCP tool wrapper name collision %q between %q and %q", name, previous, wrapper.OriginalName)
+	}
+	seen[name] = wrapper.OriginalName
+	return nil
 }
 
 func (t *MCPToolWrapper) Description() string {
@@ -132,6 +154,7 @@ func ConnectMCPServers(ctx context.Context, cfg config.Config, registry *Registr
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "luckclaw", Version: "1.0"}, nil)
 	var sessions []*MCPSession
+	wrapperNames := map[string]string{}
 
 	for name, scfg := range servers {
 		transportType := strings.TrimSpace(strings.ToLower(scfg.Type))
@@ -225,6 +248,14 @@ func ConnectMCPServers(ctx context.Context, cfg config.Config, registry *Registr
 				Desc:         tool.Description,
 				InputSchema:  schema,
 				Timeout:      toolTimeout,
+			}
+			if err := claimMCPWrapperName(wrapperNames, wrapper); err != nil {
+				_ = session.Close()
+				return nil, fmt.Errorf("MCP server %q: %w", name, err)
+			}
+			if registry.Get(wrapper.Name()) != nil {
+				_ = session.Close()
+				return nil, fmt.Errorf("MCP server %q: tool wrapper %q collides with an existing tool", name, wrapper.Name())
 			}
 			registry.Register(wrapper)
 		}
