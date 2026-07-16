@@ -92,12 +92,26 @@ type Tool interface {
 }
 
 type Registry struct {
-	tools    map[string]Tool
-	mcpTools map[string]Tool
+	tools     map[string]Tool
+	mcpTools  map[string]Tool
+	allowlist map[string]struct{}
 }
 
 func NewRegistry() *Registry {
 	return &Registry{tools: map[string]Tool{}}
+}
+
+// NewRegistryWithAllowlist creates a default-deny registry that only accepts
+// tools whose names are present in allowed. An empty allowlist accepts no tools.
+func NewRegistryWithAllowlist(allowed []string) *Registry {
+	r := NewRegistry()
+	r.allowlist = make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		if name != "" {
+			r.allowlist[name] = struct{}{}
+		}
+	}
+	return r
 }
 
 func (r *Registry) Register(t Tool) {
@@ -105,6 +119,11 @@ func (r *Registry) Register(t Tool) {
 		return
 	}
 	name := t.Name()
+	if r.allowlist != nil {
+		if _, ok := r.allowlist[name]; !ok {
+			return
+		}
+	}
 	r.tools[name] = t
 	if strings.HasPrefix(name, "mcp_") {
 		if r.mcpTools == nil {
