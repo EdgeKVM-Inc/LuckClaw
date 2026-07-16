@@ -22,7 +22,33 @@ type Bot struct {
 	logger *logging.MemoryLogger
 }
 
-func NewBot(cfgPath string) (*Bot, error) {
+type botOptions struct {
+	restrictTools bool
+	toolAllowlist []string
+}
+
+// BotOption configures a Bot at construction time.
+type BotOption func(*botOptions)
+
+// WithToolAllowlist restricts the Bot to tools with the given registered names.
+// Calling WithToolAllowlist with no names is an explicit default-deny policy.
+// Omitting the option preserves the unrestricted tool set for compatibility.
+func WithToolAllowlist(allowed ...string) BotOption {
+	allowlist := append([]string(nil), allowed...)
+	return func(options *botOptions) {
+		options.restrictTools = true
+		options.toolAllowlist = append([]string(nil), allowlist...)
+	}
+}
+
+func NewBot(cfgPath string, options ...BotOption) (*Bot, error) {
+	botOpts := botOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&botOpts)
+		}
+	}
+
 	// If cfgPath is empty, try to find it
 	if cfgPath == "" {
 		var err error
@@ -77,7 +103,11 @@ func NewBot(cfgPath string) (*Bot, error) {
 
 	logger := logging.NewMemoryLogger(1000)
 
-	a := agent.New(cfg, provider, sessMgr, model, logger)
+	agentOptions := make([]agent.Option, 0, 1)
+	if botOpts.restrictTools {
+		agentOptions = append(agentOptions, agent.WithToolAllowlist(botOpts.toolAllowlist))
+	}
+	a := agent.New(cfg, provider, sessMgr, model, logger, agentOptions...)
 
 	return &Bot{agent: a, logger: logger}, nil
 }
