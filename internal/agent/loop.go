@@ -110,7 +110,32 @@ type AgentLoop struct {
 	OnTerminalResolved func(channel, chatID string, terminalLabel string)
 }
 
-func New(cfg config.Config, provider openaiapi.ChatClient, sessions *session.Manager, model string, logger logging.Logger) *AgentLoop {
+type newOptions struct {
+	restrictTools bool
+	toolAllowlist []string
+}
+
+// Option configures an AgentLoop at construction time.
+type Option func(*newOptions)
+
+// WithToolAllowlist restricts registration to the named tools. An empty list
+// is an explicit default-deny policy that registers no tools.
+func WithToolAllowlist(allowed []string) Option {
+	allowlist := append([]string(nil), allowed...)
+	return func(options *newOptions) {
+		options.restrictTools = true
+		options.toolAllowlist = append([]string(nil), allowlist...)
+	}
+}
+
+func New(cfg config.Config, provider openaiapi.ChatClient, sessions *session.Manager, model string, logger logging.Logger, options ...Option) *AgentLoop {
+	newOpts := newOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&newOpts)
+		}
+	}
+
 	ws, _ := paths.ExpandUser(cfg.Agents.Defaults.Workspace)
 	ws = strings.TrimSpace(ws)
 	if ws == "" {
@@ -126,6 +151,9 @@ func New(cfg config.Config, provider openaiapi.ChatClient, sessions *session.Man
 	baseDir := ws
 
 	registry := tools.NewRegistry()
+	if newOpts.restrictTools {
+		registry = tools.NewRegistryWithAllowlist(newOpts.toolAllowlist)
+	}
 	registry.Register(&tools.ReadFileTool{AllowedDir: allowedDir, BaseDir: baseDir})
 	registry.Register(&tools.WriteFileTool{AllowedDir: allowedDir, BaseDir: baseDir})
 	registry.Register(&tools.EditFileTool{AllowedDir: allowedDir, BaseDir: baseDir})

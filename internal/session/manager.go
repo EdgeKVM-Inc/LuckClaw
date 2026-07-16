@@ -32,7 +32,8 @@ type Session struct {
 }
 
 type Manager struct {
-	Workspace string
+	Workspace              string
+	DisableLegacyMigration bool
 
 	mu    sync.RWMutex
 	cache map[string]*Session
@@ -202,6 +203,9 @@ func (m *Manager) load(key string) (*Session, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if m.DisableLegacyMigration {
+				return nil, nil
+			}
 			return m.loadLegacy(key)
 		}
 		return nil, err
