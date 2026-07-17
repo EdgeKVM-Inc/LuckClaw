@@ -157,6 +157,36 @@ func TestSingleShotBotNeverRetriesOrExecutesReturnedTools(t *testing.T) {
 	}
 }
 
+func TestSingleShotBotRejectsProviderRedirect(t *testing.T) {
+	var sourceHits atomic.Int32
+	var destinationHits atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		destinationHits.Add(1)
+		writeProviderReply(t, response, `{"status":"answered","reply":"redirected"}`, nil)
+	}))
+	t.Cleanup(destination.Close)
+	source := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		sourceHits.Add(1)
+		http.Redirect(response, request, destination.URL+"/chat/completions", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(source.Close)
+
+	configPath, _ := writeSingleShotConfig(t, source.URL)
+	bot, err := NewSingleShotBot(configPath, "canonical prompt\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(bot.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := bot.Chat(ctx, "current context", "ignored-session"); err == nil {
+		t.Fatal("redirected provider response was accepted")
+	}
+	if sourceHits.Load() != 1 || destinationHits.Load() != 0 {
+		t.Fatalf("redirect hits: source=%d destination=%d, want 1/0", sourceHits.Load(), destinationHits.Load())
+	}
+}
+
 func writeSingleShotConfig(t *testing.T, providerURL string) (string, string) {
 	t.Helper()
 	workspace := t.TempDir()

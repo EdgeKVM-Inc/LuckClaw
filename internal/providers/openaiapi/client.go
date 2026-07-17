@@ -23,6 +23,11 @@ type Client struct {
 	SupportsPromptCaching bool // When true, inject cache_control for system/tools (Anthropic-style)
 }
 
+// maxChatResponseBodyBytes bounds the full provider JSON envelope. 512 KiB is
+// sufficient for the adapter's legal 64 KiB nested response even when JSON
+// escaping expands every byte, while remaining suitable for embedded hosts.
+const maxChatResponseBodyBytes = 512 * 1024
+
 type Message struct {
 	Role       string     `json:"role"`
 	Content    any        `json:"content,omitempty"` // string or []ContentPart for multimodal
@@ -213,9 +218,14 @@ func NewHTTPClientWithProxy(webCfg *config.WebToolsConfig, timeout time.Duration
 		transport.Proxy = http.ProxyFromEnvironment
 	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
+		Timeout:       timeout,
+		Transport:     transport,
+		CheckRedirect: rejectProviderRedirect,
 	}
+}
+
+func rejectProviderRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) {
@@ -231,7 +241,11 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) 
 		} else {
 			transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
 		}
-		c.HTTPClient = &http.Client{Timeout: 120 * time.Second, Transport: transport}
+		c.HTTPClient = &http.Client{
+			Timeout:       120 * time.Second,
+			Transport:     transport,
+			CheckRedirect: rejectProviderRedirect,
+		}
 	}
 
 	body, err := c.buildRequestBody(req)
@@ -261,9 +275,9 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readChatResponseBody(resp)
 	if err != nil {
-		return ChatResult{}, ClassifyNetworkError(err)
+		return ChatResult{}, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -291,6 +305,27 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) 
 	result.Usage.CompletionTokens = parsed.Usage.CompletionTokens
 	result.Usage.TotalTokens = parsed.Usage.TotalTokens
 	return result, nil
+}
+
+func readChatResponseBody(response *http.Response) ([]byte, error) {
+	if response.ContentLength > maxChatResponseBodyBytes {
+		return nil, oversizedChatResponseError()
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxChatResponseBodyBytes+1))
+	if err != nil {
+		return nil, ClassifyNetworkError(err)
+	}
+	if len(body) > maxChatResponseBodyBytes {
+		return nil, oversizedChatResponseError()
+	}
+	return body, nil
+}
+
+func oversizedChatResponseError() error {
+	return &FailoverError{
+		Reason:  ReasonFormat,
+		Wrapped: fmt.Errorf("response body exceeds %d-byte limit", maxChatResponseBodyBytes),
+	}
 }
 
 // buildRequestBody marshals the request and optionally injects cache_control
