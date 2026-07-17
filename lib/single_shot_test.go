@@ -18,8 +18,9 @@ import (
 )
 
 type singleShotProviderRequest struct {
-	Model    string `json:"model"`
-	Messages []struct {
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens"`
+	Messages  []struct {
 		Role    string `json:"role"`
 		Content any    `json:"content"`
 	} `json:"messages"`
@@ -69,10 +70,10 @@ func TestSingleShotBotSendsOnlyCanonicalSystemAndCurrentContext(t *testing.T) {
 	t.Cleanup(bot.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if reply, err := bot.Chat(ctx, firstContext, sessionID); err != nil || !strings.Contains(reply, "turn 1") {
+	if reply, err := bot.Chat(ctx, firstContext, sessionID, 6_400); err != nil || !strings.Contains(reply, "turn 1") {
 		t.Fatalf("first reply=%q err=%v", reply, err)
 	}
-	if reply, err := bot.Chat(ctx, secondContext, sessionID); err != nil || !strings.Contains(reply, "turn 2") {
+	if reply, err := bot.Chat(ctx, secondContext, sessionID, 6_400); err != nil || !strings.Contains(reply, "turn 2") {
 		t.Fatalf("second reply=%q err=%v", reply, err)
 	}
 
@@ -84,7 +85,7 @@ func TestSingleShotBotSendsOnlyCanonicalSystemAndCurrentContext(t *testing.T) {
 	}
 	for index, expectedContext := range []string{firstContext, secondContext} {
 		request := got[index]
-		if request.Model != "test-model" || len(request.Tools) != 0 || len(request.Messages) != 2 {
+		if request.Model != "test-model" || request.MaxTokens != 6_400 || len(request.Tools) != 0 || len(request.Messages) != 2 {
 			t.Fatalf("request %d = %#v", index+1, request)
 		}
 		if request.Messages[0].Role != "system" || request.Messages[0].Content != systemPrompt ||
@@ -147,7 +148,7 @@ func TestSingleShotBotNeverRetriesOrExecutesReturnedTools(t *testing.T) {
 			t.Cleanup(bot.Close)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if _, err := bot.Chat(ctx, "current context", "ignored-session"); err == nil {
+			if _, err := bot.Chat(ctx, "current context", "ignored-session", 6_400); err == nil {
 				t.Fatal("unsafe provider result accepted")
 			}
 			if calls.Load() != 1 {
@@ -179,15 +180,67 @@ func TestSingleShotBotRejectsProviderRedirect(t *testing.T) {
 	t.Cleanup(bot.Close)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := bot.Chat(ctx, "current context", "ignored-session"); err == nil {
-		t.Fatal("redirected provider response was accepted")
+	if _, err := bot.Chat(ctx, "current context", "ignored-session", 6_400); err == nil ||
+		err.Error() != "single-shot provider call failed" {
+		t.Fatalf("redirected provider response returned unbounded or missing error: %v", err)
 	}
 	if sourceHits.Load() != 1 || destinationHits.Load() != 0 {
 		t.Fatalf("redirect hits: source=%d destination=%d, want 1/0", sourceHits.Load(), destinationHits.Load())
 	}
 }
 
+func TestSingleShotBotUsesOnlyValidOutputReserve(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		window        int
+		outputReserve int
+		wantCall      bool
+	}{
+		{name: "8k exact cap", window: 8_000, outputReserve: 4_000, wantCall: true},
+		{name: "32k exact cap", window: 32_000, outputReserve: 6_400, wantCall: true},
+		{name: "zero", window: 32_000, outputReserve: 0},
+		{name: "negative", window: 32_000, outputReserve: -1},
+		{name: "below 8k minimum", window: 8_000, outputReserve: 3_999},
+		{name: "below 32k minimum", window: 32_000, outputReserve: 6_399},
+		{name: "reaches window", window: 32_000, outputReserve: 32_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			var request singleShotProviderRequest
+			provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, providerRequest *http.Request) {
+				calls.Add(1)
+				if err := json.NewDecoder(providerRequest.Body).Decode(&request); err != nil {
+					t.Error(err)
+				}
+				writeProviderReply(t, response, `{"status":"answered","reply":"bounded"}`, nil)
+			}))
+			t.Cleanup(provider.Close)
+
+			configPath, _ := writeSingleShotConfigForWindow(t, provider.URL, test.window)
+			bot, err := NewSingleShotBot(configPath, "canonical prompt\n")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(bot.Close)
+			_, err = bot.Chat(context.Background(), "current context", "ignored-session", test.outputReserve)
+			if test.wantCall {
+				if err != nil || calls.Load() != 1 || request.MaxTokens != test.outputReserve {
+					t.Fatalf("error=%v calls=%d max_tokens=%d, want nil/1/%d", err, calls.Load(), request.MaxTokens, test.outputReserve)
+				}
+				return
+			}
+			if err == nil || calls.Load() != 0 {
+				t.Fatalf("invalid cap error=%v provider calls=%d", err, calls.Load())
+			}
+		})
+	}
+}
+
 func writeSingleShotConfig(t *testing.T, providerURL string) (string, string) {
+	return writeSingleShotConfigForWindow(t, providerURL, 32_000)
+}
+
+func writeSingleShotConfigForWindow(t *testing.T, providerURL string, modelWindowTokens int) (string, string) {
 	t.Helper()
 	workspace := t.TempDir()
 	cfg := config.Default()
@@ -196,7 +249,7 @@ func writeSingleShotConfig(t *testing.T, providerURL string) (string, string) {
 	cfg.Agents.Defaults.Provider = "openai"
 	cfg.Providers.OpenAI.APIKey = "test-key"
 	cfg.Providers.OpenAI.APIBase = providerURL
-	cfg.Models.ContextWindow = map[string]int{"openai/test-model": 32_000}
+	cfg.Models.ContextWindow = map[string]int{"openai/test-model": modelWindowTokens}
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatal(err)

@@ -18,6 +18,7 @@ type SingleShotBot struct {
 	config       config.Config
 	provider     *openaiapi.Client
 	model        string
+	modelWindow  int
 	systemPrompt string
 }
 
@@ -45,6 +46,10 @@ func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
 	if selected == nil || selected.Name != providerName {
 		return nil, errors.New("single-shot provider does not match the explicit selection")
 	}
+	modelWindow, exactWindow := cfg.Models.ContextWindow[model]
+	if !exactWindow || modelWindow <= 0 {
+		return nil, errors.New("single-shot model window is unavailable")
+	}
 	provider := &openaiapi.Client{
 		APIKey:       selected.APIKey,
 		APIBase:      selected.APIBase,
@@ -58,13 +63,17 @@ func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
 		config:       cfg,
 		provider:     provider,
 		model:        cfg.ModelIDForAPI(model),
+		modelWindow:  modelWindow,
 		systemPrompt: systemPrompt,
 	}, nil
 }
 
-func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string) (string, error) {
+func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string, outputReserveTokens int) (string, error) {
 	if b == nil || b.provider == nil {
 		return "", errors.New("single-shot provider is unavailable")
+	}
+	if !validOutputReserve(outputReserveTokens, b.modelWindow) {
+		return "", errors.New("single-shot output reserve is outside the model window")
 	}
 	result, err := b.provider.Chat(ctx, openaiapi.ChatRequest{
 		Model: b.model,
@@ -73,7 +82,7 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string) (string
 			{Role: "user", Content: contextText},
 		},
 		Temperature:     b.config.Agents.Defaults.Temperature,
-		MaxTokens:       b.config.Agents.Defaults.MaxTokens,
+		MaxTokens:       outputReserveTokens,
 		ReasoningEffort: b.config.Agents.Defaults.ReasoningEffort,
 	})
 	if err != nil {
@@ -86,6 +95,20 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string) (string
 		return "", errors.New("single-shot provider returned an empty response")
 	}
 	return result.Content, nil
+}
+
+func validOutputReserve(outputReserveTokens, modelWindowTokens int) bool {
+	if modelWindowTokens <= 0 {
+		return false
+	}
+	minimum := modelWindowTokens / 5
+	if modelWindowTokens%5 != 0 {
+		minimum++
+	}
+	if minimum < 4_000 {
+		minimum = 4_000
+	}
+	return outputReserveTokens >= minimum && outputReserveTokens < modelWindowTokens
 }
 
 func (b *SingleShotBot) Close() {
