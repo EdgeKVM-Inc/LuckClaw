@@ -55,6 +55,10 @@ type ToolCall struct {
 	Function ToolFunction `json:"function"`
 }
 
+type ResponseFormat struct {
+	Type string `json:"type"`
+}
+
 type ContentPart interface {
 	contentPart()
 }
@@ -120,6 +124,7 @@ type ChatRequest struct {
 	MaxTokens       int              `json:"max_tokens,omitempty"`
 	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
 	PromptCacheKey  string           `json:"prompt_cache_key,omitempty"` // Codex-style cache key (SHA256 of messages)
+	ResponseFormat  *ResponseFormat  `json:"response_format,omitempty"`
 }
 
 type ChatResponse struct {

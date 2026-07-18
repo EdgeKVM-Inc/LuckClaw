@@ -18,9 +18,12 @@ import (
 )
 
 type singleShotProviderRequest struct {
-	Model     string `json:"model"`
-	MaxTokens int    `json:"max_tokens"`
-	Messages  []struct {
+	Model          string `json:"model"`
+	MaxTokens      int    `json:"max_tokens"`
+	ResponseFormat *struct {
+		Type string `json:"type"`
+	} `json:"response_format"`
+	Messages []struct {
 		Role    string `json:"role"`
 		Content any    `json:"content"`
 	} `json:"messages"`
@@ -87,6 +90,9 @@ func TestSingleShotBotSendsOnlyCanonicalSystemAndCurrentContext(t *testing.T) {
 		request := got[index]
 		if request.Model != "test-model" || request.MaxTokens != 6_400 || len(request.Tools) != 0 || len(request.Messages) != 2 {
 			t.Fatalf("request %d = %#v", index+1, request)
+		}
+		if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_object" {
+			t.Fatalf("request %d response_format=%#v, want json_object", index+1, request.ResponseFormat)
 		}
 		if request.Messages[0].Role != "system" || request.Messages[0].Content != systemPrompt ||
 			request.Messages[1].Role != "user" || request.Messages[1].Content != expectedContext {

@@ -84,6 +84,7 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string, outputR
 		Temperature:     b.config.Agents.Defaults.Temperature,
 		MaxTokens:       outputReserveTokens,
 		ReasoningEffort: b.config.Agents.Defaults.ReasoningEffort,
+		ResponseFormat:  &openaiapi.ResponseFormat{Type: "json_object"},
 	})
 	if err != nil {
 		return "", errors.New("single-shot provider call failed")

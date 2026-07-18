@@ -2,6 +2,7 @@ package openaiapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -39,6 +40,40 @@ func (body *countingResponseBody) Read(buffer []byte) (int, error) {
 }
 
 func (*countingResponseBody) Close() error { return nil }
+
+func TestChatRequestResponseFormatIsOptional(t *testing.T) {
+	ordinary, err := (&Client{}).buildRequestBody(ChatRequest{
+		Model:    "test-model",
+		Messages: []Message{{Role: "user", Content: "ordinary"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ordinaryBody map[string]any
+	if err := json.Unmarshal(ordinary, &ordinaryBody); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := ordinaryBody["response_format"]; present {
+		t.Fatalf("ordinary request unexpectedly contains response_format: %s", ordinary)
+	}
+
+	var structured ChatRequest
+	if err := json.Unmarshal([]byte(`{"model":"test-model","messages":[],"response_format":{"type":"json_object"}}`), &structured); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := (&Client{}).buildRequestBody(structured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var structuredBody map[string]any
+	if err := json.Unmarshal(encoded, &structuredBody); err != nil {
+		t.Fatal(err)
+	}
+	format, ok := structuredBody["response_format"].(map[string]any)
+	if !ok || format["type"] != "json_object" {
+		t.Fatalf("structured response format missing: %s", encoded)
+	}
+}
 
 func TestChatRejectsOversizedSuccessAndErrorBodiesAtReadLimit(t *testing.T) {
 	for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
