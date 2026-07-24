@@ -123,12 +123,16 @@ func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"purpose":          map[string]any{"type": "string"},
-			"source":           map[string]any{"type": "string"},
-			"inputs":           map[string]any{"type": "object"},
-			"requestedTargets": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"requestedEffects": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"requestedLimits":  map[string]any{"type": "object"},
+			"purpose": map[string]any{"type": "string", "minLength": 1},
+			"source":  map[string]any{"type": "string", "minLength": 1},
+			"inputs":  map[string]any{"type": "object"},
+			"requestedTargets": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string", "minLength": 1},
+			},
+			"requestedEffects": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string", "minLength": 1},
+			},
+			"requestedLimits": map[string]any{"type": "object"},
 		},
 		"required": []string{
 			"purpose",
@@ -139,25 +143,29 @@ func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
 			"requestedLimits",
 		},
 	}
+	turn := func(status string, proposalSchema map[string]any) map[string]any {
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"status":   map[string]any{"const": status},
+				"reply":    map[string]any{"type": "string", "minLength": 1},
+				"proposal": proposalSchema,
+			},
+			"required": []string{"status", "reply", "proposal"},
+		}
+	}
 	return &openaiapi.ResponseFormat{
 		Type: "json_schema",
 		JSONSchema: &openaiapi.JSONSchemaResponseFormat{
 			Name:   "swarmboard_turn",
 			Strict: true,
 			Schema: map[string]any{
-				"type":                 "object",
-				"additionalProperties": false,
-				"properties": map[string]any{
-					"status": map[string]any{
-						"type": "string",
-						"enum": []string{"answered", "awaiting_clarification", "execution_proposed"},
-					},
-					"reply": map[string]any{"type": "string"},
-					"proposal": map[string]any{
-						"anyOf": []any{map[string]any{"type": "null"}, proposal},
-					},
+				"oneOf": []any{
+					turn("answered", map[string]any{"type": "null"}),
+					turn("awaiting_clarification", map[string]any{"type": "null"}),
+					turn("execution_proposed", proposal),
 				},
-				"required": []string{"status", "reply", "proposal"},
 			},
 		},
 	}

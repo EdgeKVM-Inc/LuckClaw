@@ -151,12 +151,19 @@ func TestSingleShotBotUsesStrictTurnSchemaForOllama(t *testing.T) {
 		t.Fatalf("response_format=%#v, want strict swarmboard_turn schema", request.ResponseFormat)
 	}
 	schema := request.ResponseFormat.JSONSchema.Schema
-	properties, _ := schema["properties"].(map[string]any)
-	status, _ := properties["status"].(map[string]any)
-	proposal, _ := properties["proposal"].(map[string]any)
-	if schema["type"] != "object" || schema["additionalProperties"] != false ||
-		status["type"] != "string" || proposal["anyOf"] == nil {
+	branches, _ := schema["oneOf"].([]any)
+	if len(branches) != 3 {
 		t.Fatalf("response schema is incomplete: %#v", schema)
+	}
+	for _, rawBranch := range branches {
+		branch, _ := rawBranch.(map[string]any)
+		properties, _ := branch["properties"].(map[string]any)
+		status, _ := properties["status"].(map[string]any)
+		proposal, _ := properties["proposal"].(map[string]any)
+		if branch["type"] != "object" || branch["additionalProperties"] != false ||
+			status["const"] == nil || proposal["type"] == nil {
+			t.Fatalf("response schema branch is incomplete: %#v", branch)
+		}
 	}
 }
 
