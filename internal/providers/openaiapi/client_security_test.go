@@ -58,7 +58,7 @@ func TestChatRequestResponseFormatIsOptional(t *testing.T) {
 	}
 
 	var structured ChatRequest
-	if err := json.Unmarshal([]byte(`{"model":"test-model","messages":[],"response_format":{"type":"json_object"}}`), &structured); err != nil {
+	if err := json.Unmarshal([]byte(`{"model":"test-model","messages":[],"response_format":{"type":"json_schema","json_schema":{"name":"turn","strict":true,"schema":{"type":"object","properties":{"reply":{"type":"string"}},"required":["reply"],"additionalProperties":false}}}}`), &structured); err != nil {
 		t.Fatal(err)
 	}
 	encoded, err := (&Client{}).buildRequestBody(structured)
@@ -70,7 +70,10 @@ func TestChatRequestResponseFormatIsOptional(t *testing.T) {
 		t.Fatal(err)
 	}
 	format, ok := structuredBody["response_format"].(map[string]any)
-	if !ok || format["type"] != "json_object" {
+	jsonSchema, _ := format["json_schema"].(map[string]any)
+	schema, _ := jsonSchema["schema"].(map[string]any)
+	if !ok || format["type"] != "json_schema" || jsonSchema["name"] != "turn" ||
+		jsonSchema["strict"] != true || schema["additionalProperties"] != false {
 		t.Fatalf("structured response format missing: %s", encoded)
 	}
 }

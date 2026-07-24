@@ -21,7 +21,12 @@ type singleShotProviderRequest struct {
 	Model          string `json:"model"`
 	MaxTokens      int    `json:"max_tokens"`
 	ResponseFormat *struct {
-		Type string `json:"type"`
+		Type       string `json:"type"`
+		JSONSchema *struct {
+			Name   string         `json:"name"`
+			Strict bool           `json:"strict"`
+			Schema map[string]any `json:"schema"`
+		} `json:"json_schema"`
 	} `json:"response_format"`
 	Messages []struct {
 		Role    string `json:"role"`
@@ -115,6 +120,43 @@ func TestSingleShotBotSendsOnlyCanonicalSystemAndCurrentContext(t *testing.T) {
 	}
 	if got := bot.ToolNames(); len(got) != 0 {
 		t.Fatalf("single-shot tools=%v", got)
+	}
+}
+
+func TestSingleShotBotUsesStrictTurnSchemaForOllama(t *testing.T) {
+	var request singleShotProviderRequest
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, raw *http.Request) {
+		if err := json.NewDecoder(raw.Body).Decode(&request); err != nil {
+			http.Error(response, "bad request", http.StatusBadRequest)
+			return
+		}
+		writeProviderReply(t, response, `{"status":"answered","reply":"bounded","proposal":null}`, nil)
+	}))
+	t.Cleanup(provider.Close)
+
+	configPath, _ := writeSingleShotOllamaConfig(t, provider.URL)
+	bot, err := NewSingleShotBot(configPath, "canonical prompt\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(bot.Close)
+	if _, err := bot.Chat(context.Background(), "current context", "session", 6_400); err != nil {
+		t.Fatal(err)
+	}
+
+	if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_schema" ||
+		request.ResponseFormat.JSONSchema == nil ||
+		request.ResponseFormat.JSONSchema.Name != "swarmboard_turn" ||
+		!request.ResponseFormat.JSONSchema.Strict {
+		t.Fatalf("response_format=%#v, want strict swarmboard_turn schema", request.ResponseFormat)
+	}
+	schema := request.ResponseFormat.JSONSchema.Schema
+	properties, _ := schema["properties"].(map[string]any)
+	status, _ := properties["status"].(map[string]any)
+	proposal, _ := properties["proposal"].(map[string]any)
+	if schema["type"] != "object" || schema["additionalProperties"] != false ||
+		status["type"] != "string" || proposal["anyOf"] == nil {
+		t.Fatalf("response schema is incomplete: %#v", schema)
 	}
 }
 
@@ -256,6 +298,22 @@ func writeSingleShotConfigForWindow(t *testing.T, providerURL string, modelWindo
 	cfg.Providers.OpenAI.APIKey = "test-key"
 	cfg.Providers.OpenAI.APIBase = providerURL
 	cfg.Models.ContextWindow = map[string]int{"openai/test-model": modelWindowTokens}
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	return configPath, workspace
+}
+
+func writeSingleShotOllamaConfig(t *testing.T, providerURL string) (string, string) {
+	t.Helper()
+	workspace := t.TempDir()
+	cfg := config.Default()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.Model = "ollama/test-model"
+	cfg.Agents.Defaults.Provider = "ollama"
+	cfg.Providers.Ollama.APIBase = providerURL
+	cfg.Models.ContextWindow = map[string]int{"ollama/test-model": 32_000}
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatal(err)

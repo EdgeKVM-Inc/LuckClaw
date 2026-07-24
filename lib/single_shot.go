@@ -15,11 +15,12 @@ import (
 // selected provider. It deliberately has no agent loop, tools, skills,
 // sessions, memory, routing, retries, or logging.
 type SingleShotBot struct {
-	config       config.Config
-	provider     *openaiapi.Client
-	model        string
-	modelWindow  int
-	systemPrompt string
+	config         config.Config
+	provider       *openaiapi.Client
+	model          string
+	modelWindow    int
+	systemPrompt   string
+	responseFormat *openaiapi.ResponseFormat
 }
 
 func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
@@ -59,12 +60,17 @@ func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
 		// Keep it disabled so the provider sees the exact caller-owned bytes.
 		SupportsPromptCaching: false,
 	}
+	responseFormat := &openaiapi.ResponseFormat{Type: "json_object"}
+	if providerName == "ollama" {
+		responseFormat = swarmboardTurnResponseFormat()
+	}
 	return &SingleShotBot{
-		config:       cfg,
-		provider:     provider,
-		model:        cfg.ModelIDForAPI(model),
-		modelWindow:  modelWindow,
-		systemPrompt: systemPrompt,
+		config:         cfg,
+		provider:       provider,
+		model:          cfg.ModelIDForAPI(model),
+		modelWindow:    modelWindow,
+		systemPrompt:   systemPrompt,
+		responseFormat: responseFormat,
 	}, nil
 }
 
@@ -84,7 +90,7 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string, outputR
 		Temperature:     b.config.Agents.Defaults.Temperature,
 		MaxTokens:       outputReserveTokens,
 		ReasoningEffort: b.config.Agents.Defaults.ReasoningEffort,
-		ResponseFormat:  &openaiapi.ResponseFormat{Type: "json_object"},
+		ResponseFormat:  b.responseFormat,
 	})
 	if err != nil {
 		return "", errors.New("single-shot provider call failed")
@@ -110,6 +116,51 @@ func validOutputReserve(outputReserveTokens, modelWindowTokens int) bool {
 		minimum = 4_000
 	}
 	return outputReserveTokens >= minimum && outputReserveTokens < modelWindowTokens
+}
+
+func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
+	proposal := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"purpose":          map[string]any{"type": "string"},
+			"source":           map[string]any{"type": "string"},
+			"inputs":           map[string]any{"type": "object"},
+			"requestedTargets": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"requestedEffects": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"requestedLimits":  map[string]any{"type": "object"},
+		},
+		"required": []string{
+			"purpose",
+			"source",
+			"inputs",
+			"requestedTargets",
+			"requestedEffects",
+			"requestedLimits",
+		},
+	}
+	return &openaiapi.ResponseFormat{
+		Type: "json_schema",
+		JSONSchema: &openaiapi.JSONSchemaResponseFormat{
+			Name:   "swarmboard_turn",
+			Strict: true,
+			Schema: map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"status": map[string]any{
+						"type": "string",
+						"enum": []string{"answered", "awaiting_clarification", "execution_proposed"},
+					},
+					"reply": map[string]any{"type": "string"},
+					"proposal": map[string]any{
+						"anyOf": []any{map[string]any{"type": "null"}, proposal},
+					},
+				},
+				"required": []string{"status", "reply", "proposal"},
+			},
+		},
+	}
 }
 
 func (b *SingleShotBot) Close() {

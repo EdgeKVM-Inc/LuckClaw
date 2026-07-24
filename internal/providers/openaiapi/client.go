@@ -56,7 +56,14 @@ type ToolCall struct {
 }
 
 type ResponseFormat struct {
-	Type string `json:"type"`
+	Type       string                    `json:"type"`
+	JSONSchema *JSONSchemaResponseFormat `json:"json_schema,omitempty"`
+}
+
+type JSONSchemaResponseFormat struct {
+	Name   string         `json:"name"`
+	Strict bool           `json:"strict"`
+	Schema map[string]any `json:"schema"`
 }
 
 type ContentPart interface {
