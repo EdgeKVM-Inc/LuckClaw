@@ -172,8 +172,23 @@ func TestSingleShotBotUsesStrictTurnSchemaForOllama(t *testing.T) {
 	inputs, _ := proposalProperties["inputs"].(map[string]any)
 	requestedEffects, _ := proposalProperties["requestedEffects"].(map[string]any)
 	effectItems, _ := requestedEffects["items"].(map[string]any)
+	requestedLimits, _ := proposalProperties["requestedLimits"].(map[string]any)
+	limitProperties, _ := requestedLimits["properties"].(map[string]any)
 	if inputs["additionalProperties"] != false || inputs["required"] == nil || effectItems["enum"] == nil {
 		t.Fatalf("execution proposal schema does not constrain declarations: %#v", proposal)
+	}
+	if requestedLimits["additionalProperties"] != false || len(limitProperties) != 6 {
+		t.Fatalf("execution proposal schema does not constrain resource limits: %#v", requestedLimits)
+	}
+	for name, maximum := range map[string]int{
+		"cpuPercent": 25, "externalCalls": 64, "memoryMiB": 48,
+		"outputBytes": 1_048_576, "pids": 16, "wallTimeSeconds": 30,
+	} {
+		property, _ := limitProperties[name].(map[string]any)
+		if property["type"] != "integer" || property["minimum"] != float64(1) ||
+			property["maximum"] != float64(maximum) {
+			t.Fatalf("resource limit %q schema=%#v", name, property)
+		}
 	}
 }
 

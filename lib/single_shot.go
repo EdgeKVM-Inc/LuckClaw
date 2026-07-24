@@ -141,10 +141,13 @@ func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
 				"required": []string{"effects"},
 			},
 			"requestedTargets": map[string]any{
-				"type": "array", "items": map[string]any{"type": "string", "minLength": 1},
+				"type":        "array",
+				"items":       map[string]any{"type": "string", "minLength": 1},
+				"uniqueItems": true,
 			},
 			"requestedEffects": map[string]any{
-				"type": "array",
+				"type":        "array",
+				"uniqueItems": true,
 				"items": map[string]any{
 					"type": "string",
 					"enum": []string{
@@ -157,7 +160,19 @@ func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
 					},
 				},
 			},
-			"requestedLimits": map[string]any{"type": "object"},
+			"requestedLimits": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"description":          "Optional sandbox resource ceilings only; API query arguments belong in inputs.effects.",
+				"properties": map[string]any{
+					"cpuPercent":      map[string]any{"type": "integer", "minimum": 1, "maximum": 25},
+					"externalCalls":   map[string]any{"type": "integer", "minimum": 1, "maximum": 64},
+					"memoryMiB":       map[string]any{"type": "integer", "minimum": 1, "maximum": 48},
+					"outputBytes":     map[string]any{"type": "integer", "minimum": 1, "maximum": 1_048_576},
+					"pids":            map[string]any{"type": "integer", "minimum": 1, "maximum": 16},
+					"wallTimeSeconds": map[string]any{"type": "integer", "minimum": 1, "maximum": 30},
+				},
+			},
 		},
 		"required": []string{
 			"purpose",
