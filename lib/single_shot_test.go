@@ -170,12 +170,31 @@ func TestSingleShotBotUsesStrictTurnSchemaForOllama(t *testing.T) {
 	proposal, _ := executionProperties["proposal"].(map[string]any)
 	proposalProperties, _ := proposal["properties"].(map[string]any)
 	inputs, _ := proposalProperties["inputs"].(map[string]any)
+	inputProperties, _ := inputs["properties"].(map[string]any)
+	effects, _ := inputProperties["effects"].(map[string]any)
+	effectDeclaration, _ := effects["items"].(map[string]any)
+	effectBranches, _ := effectDeclaration["oneOf"].([]any)
 	requestedEffects, _ := proposalProperties["requestedEffects"].(map[string]any)
 	effectItems, _ := requestedEffects["items"].(map[string]any)
 	requestedLimits, _ := proposalProperties["requestedLimits"].(map[string]any)
 	limitProperties, _ := requestedLimits["properties"].(map[string]any)
-	if inputs["additionalProperties"] != false || inputs["required"] == nil || effectItems["enum"] == nil {
+	if inputs["additionalProperties"] != false || inputs["required"] == nil ||
+		len(effectBranches) != 4 || effectItems["enum"] == nil {
 		t.Fatalf("execution proposal schema does not constrain declarations: %#v", proposal)
+	}
+	controllerCall, _ := effectBranches[0].(map[string]any)
+	controllerProperties, _ := controllerCall["properties"].(map[string]any)
+	controllerKind, _ := controllerProperties["kind"].(map[string]any)
+	controllerRequired, _ := controllerCall["required"].([]any)
+	if controllerCall["additionalProperties"] != false || controllerKind["const"] != "controller.call" ||
+		len(controllerRequired) != 3 || controllerProperties["operationId"] == nil ||
+		controllerProperties["arguments"] == nil {
+		t.Fatalf("controller call declaration schema is incomplete: %#v", controllerCall)
+	}
+	source, _ := proposalProperties["source"].(map[string]any)
+	sourceDescription, _ := source["description"].(string)
+	if !strings.Contains(sourceDescription, "from swarmboard import controller") {
+		t.Fatalf("proposal source schema omits restricted-client import guidance: %#v", source)
 	}
 	if requestedLimits["additionalProperties"] != false || len(limitProperties) != 6 {
 		t.Fatalf("execution proposal schema does not constrain resource limits: %#v", requestedLimits)

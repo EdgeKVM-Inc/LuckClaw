@@ -119,6 +119,58 @@ func validOutputReserve(outputReserveTokens, modelWindowTokens int) bool {
 }
 
 func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
+	effectDeclaration := map[string]any{
+		"oneOf": []any{
+			map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"kind":        map[string]any{"const": "controller.call"},
+					"operationId": map[string]any{"type": "string", "minLength": 1},
+					"arguments":   map[string]any{"type": "object"},
+				},
+				"required": []string{"kind", "operationId", "arguments"},
+			},
+			map[string]any{
+				"type":                 "object",
+				"additionalProperties": true,
+				"properties": map[string]any{
+					"kind": map[string]any{
+						"type": "string",
+						"enum": []string{"sds.read", "sds.condition", "sds.write_config"},
+					},
+					"device":         map[string]any{"type": "string", "minLength": 1},
+					"appId":          map[string]any{"type": "string", "minLength": 1},
+					"schemaRevision": map[string]any{"type": "string", "minLength": 1},
+					"fieldPath":      map[string]any{"type": "string", "minLength": 1},
+				},
+				"required": []string{"kind", "device", "appId", "schemaRevision", "fieldPath"},
+			},
+			map[string]any{
+				"type":                 "object",
+				"additionalProperties": true,
+				"properties": map[string]any{
+					"kind": map[string]any{
+						"type": "string",
+						"enum": []string{"workflow.save", "schedule.save"},
+					},
+				},
+				"required": []string{"kind"},
+			},
+			map[string]any{
+				"type":                 "object",
+				"additionalProperties": true,
+				"properties": map[string]any{
+					"kind": map[string]any{
+						"type": "string",
+						"enum": []string{"memory.read", "memory.write"},
+					},
+					"key": map[string]any{"type": "string", "minLength": 1},
+				},
+				"required": []string{"kind", "key"},
+			},
+		},
+	}
 	proposal := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
@@ -127,7 +179,7 @@ func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
 			"source": map[string]any{
 				"type":        "string",
 				"minLength":   1,
-				"description": "Complete Python source with exactly one def main(context), not JSON or a filename.",
+				"description": "Complete Python source with exactly one def main(context), not JSON or a filename. Import every used restricted client; controller calls require from swarmboard import controller.",
 			},
 			"inputs": map[string]any{
 				"type":                 "object",
@@ -135,7 +187,7 @@ func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
 				"properties": map[string]any{
 					"effects": map[string]any{
 						"type":  "array",
-						"items": map[string]any{"type": "object"},
+						"items": effectDeclaration,
 					},
 				},
 				"required": []string{"effects"},
