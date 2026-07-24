@@ -165,6 +165,16 @@ func TestSingleShotBotUsesStrictTurnSchemaForOllama(t *testing.T) {
 			t.Fatalf("response schema branch is incomplete: %#v", branch)
 		}
 	}
+	execution, _ := branches[2].(map[string]any)
+	executionProperties, _ := execution["properties"].(map[string]any)
+	proposal, _ := executionProperties["proposal"].(map[string]any)
+	proposalProperties, _ := proposal["properties"].(map[string]any)
+	inputs, _ := proposalProperties["inputs"].(map[string]any)
+	requestedEffects, _ := proposalProperties["requestedEffects"].(map[string]any)
+	effectItems, _ := requestedEffects["items"].(map[string]any)
+	if inputs["additionalProperties"] != false || inputs["required"] == nil || effectItems["enum"] == nil {
+		t.Fatalf("execution proposal schema does not constrain declarations: %#v", proposal)
+	}
 }
 
 func TestSingleShotBotNeverRetriesOrExecutesReturnedTools(t *testing.T) {

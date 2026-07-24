@@ -124,13 +124,38 @@ func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"purpose": map[string]any{"type": "string", "minLength": 1},
-			"source":  map[string]any{"type": "string", "minLength": 1},
-			"inputs":  map[string]any{"type": "object"},
+			"source": map[string]any{
+				"type":        "string",
+				"minLength":   1,
+				"description": "Complete Python source with exactly one def main(context), not JSON or a filename.",
+			},
+			"inputs": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"effects": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "object"},
+					},
+				},
+				"required": []string{"effects"},
+			},
 			"requestedTargets": map[string]any{
 				"type": "array", "items": map[string]any{"type": "string", "minLength": 1},
 			},
 			"requestedEffects": map[string]any{
-				"type": "array", "items": map[string]any{"type": "string", "minLength": 1},
+				"type": "array",
+				"items": map[string]any{
+					"type": "string",
+					"enum": []string{
+						"read",
+						"config_mutation",
+						"controller_mutation",
+						"workflow_schedule_mutation",
+						"memory_mutation",
+						"high_risk_preparation",
+					},
+				},
 			},
 			"requestedLimits": map[string]any{"type": "object"},
 		},
