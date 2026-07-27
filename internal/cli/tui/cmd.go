@@ -250,6 +250,7 @@ func NewCmd() *cobra.Command {
 			client := &openaiapi.Client{
 				APIKey:       selected.APIKey,
 				APIBase:      selected.APIBase,
+				Provider:     selected.Name,
 				ExtraHeaders: selected.ExtraHeaders,
 				HTTPClient:   openaiapi.NewHTTPClientWithProxy(&cfg.Tools.Web, 120*time.Second),
 			}

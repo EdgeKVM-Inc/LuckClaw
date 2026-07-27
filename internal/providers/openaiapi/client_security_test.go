@@ -85,6 +85,57 @@ func TestChatRequestResponseFormatIsOptional(t *testing.T) {
 	}
 }
 
+func TestCurrentOpenAIModelsUseCompatibleChatFields(t *testing.T) {
+	encoded, err := (&Client{Provider: "openai"}).buildRequestBody(ChatRequest{
+		Model:           "gpt-5.6-terra",
+		Messages:        []Message{{Role: "user", Content: "analyze"}},
+		Temperature:     0.1,
+		MaxTokens:       8192,
+		ReasoningEffort: "medium",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := body["max_tokens"]; present {
+		t.Fatalf("current OpenAI request contains legacy max_tokens: %s", encoded)
+	}
+	if _, present := body["temperature"]; present {
+		t.Fatalf("current OpenAI request contains unsupported temperature: %s", encoded)
+	}
+	if body["max_completion_tokens"] != float64(8192) {
+		t.Fatalf("max_completion_tokens = %v, want 8192", body["max_completion_tokens"])
+	}
+	if body["reasoning_effort"] != "medium" {
+		t.Fatalf("reasoning_effort = %v, want medium", body["reasoning_effort"])
+	}
+}
+
+func TestCompatibleProviderModelsKeepLegacyChatFields(t *testing.T) {
+	encoded, err := (&Client{Provider: "ollama"}).buildRequestBody(ChatRequest{
+		Model:       "qwen2.5",
+		Messages:    []Message{{Role: "user", Content: "analyze"}},
+		Temperature: 0.1,
+		MaxTokens:   8192,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(encoded, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["max_tokens"] != float64(8192) || body["temperature"] != 0.1 {
+		t.Fatalf("compatible-provider controls changed: %s", encoded)
+	}
+	if _, present := body["max_completion_tokens"]; present {
+		t.Fatalf("compatible-provider request contains OpenAI-only field: %s", encoded)
+	}
+}
+
 func TestProviderRootPoolLoadsCertifiFallback(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(server.Close)

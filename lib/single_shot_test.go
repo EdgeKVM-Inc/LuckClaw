@@ -18,9 +18,11 @@ import (
 )
 
 type singleShotProviderRequest struct {
-	Model          string `json:"model"`
-	MaxTokens      int    `json:"max_tokens"`
-	ResponseFormat *struct {
+	Model               string   `json:"model"`
+	MaxTokens           int      `json:"max_tokens"`
+	MaxCompletionTokens int      `json:"max_completion_tokens"`
+	Temperature         *float64 `json:"temperature"`
+	ResponseFormat      *struct {
 		Type       string `json:"type"`
 		JSONSchema *struct {
 			Name   string         `json:"name"`
@@ -33,6 +35,34 @@ type singleShotProviderRequest struct {
 		Content any    `json:"content"`
 	} `json:"messages"`
 	Tools []any `json:"tools"`
+}
+
+func TestSingleShotBotUsesCurrentOpenAIChatFields(t *testing.T) {
+	var request singleShotProviderRequest
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, raw *http.Request) {
+		if err := json.NewDecoder(raw.Body).Decode(&request); err != nil {
+			http.Error(response, "bad request", http.StatusBadRequest)
+			return
+		}
+		writeProviderReply(t, response, `{"status":"answered","reply":"bounded"}`, nil)
+	}))
+	t.Cleanup(provider.Close)
+
+	configPath, _ := writeSingleShotCurrentOpenAIConfig(t, provider.URL)
+	bot, err := NewSingleShotBot(configPath, "canonical prompt\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(bot.Close)
+	if _, err := bot.Chat(context.Background(), "current context", "session", 6_400); err != nil {
+		t.Fatal(err)
+	}
+	if request.Model != "gpt-5.6-terra" || request.MaxCompletionTokens != 6_400 {
+		t.Fatalf("current OpenAI request = %#v", request)
+	}
+	if request.MaxTokens != 0 || request.Temperature != nil {
+		t.Fatalf("current OpenAI request kept unsupported controls: %#v", request)
+	}
 }
 
 func TestSingleShotBotSendsOnlyCanonicalSystemAndCurrentContext(t *testing.T) {
@@ -349,6 +379,23 @@ func writeSingleShotConfigForWindow(t *testing.T, providerURL string, modelWindo
 	cfg.Providers.OpenAI.APIKey = "test-key"
 	cfg.Providers.OpenAI.APIBase = providerURL
 	cfg.Models.ContextWindow = map[string]int{"openai/test-model": modelWindowTokens}
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	return configPath, workspace
+}
+
+func writeSingleShotCurrentOpenAIConfig(t *testing.T, providerURL string) (string, string) {
+	t.Helper()
+	workspace := t.TempDir()
+	cfg := config.Default()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.Model = "openai/gpt-5.6-terra"
+	cfg.Agents.Defaults.Provider = "openai"
+	cfg.Providers.OpenAI.APIKey = "test-key"
+	cfg.Providers.OpenAI.APIBase = providerURL
+	cfg.Models.ContextWindow = map[string]int{"openai/gpt-5.6-terra": 32_000}
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatal(err)

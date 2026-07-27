@@ -54,6 +54,7 @@ func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
 	provider := &openaiapi.Client{
 		APIKey:       selected.APIKey,
 		APIBase:      selected.APIBase,
+		Provider:     selected.Name,
 		ExtraHeaders: selected.ExtraHeaders,
 		HTTPClient:   openaiapi.NewHTTPClientWithProxy(&cfg.Tools.Web, 120*time.Second),
 		// Prompt caching rewrites a raw system string into content blocks.

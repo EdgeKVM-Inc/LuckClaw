@@ -22,6 +22,7 @@ import (
 type Client struct {
 	APIKey                string
 	APIBase               string
+	Provider              string
 	ExtraHeaders          map[string]string
 	HTTPClient            *http.Client
 	SupportsPromptCaching bool // When true, inject cache_control for system/tools (Anthropic-style)
@@ -406,15 +407,38 @@ func (c *Client) buildRequestBody(req ChatRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !c.SupportsPromptCaching {
+	currentOpenAIFields := c.usesCurrentOpenAIChatFields(req.Model)
+	if !c.SupportsPromptCaching && !currentOpenAIFields {
 		return body, nil
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return body, nil
 	}
+	if currentOpenAIFields {
+		delete(raw, "temperature")
+		if req.MaxTokens > 0 {
+			delete(raw, "max_tokens")
+			raw["max_completion_tokens"] = req.MaxTokens
+		}
+	}
+	if !c.SupportsPromptCaching {
+		return json.Marshal(raw)
+	}
 	applyCacheControl(raw)
 	return json.Marshal(raw)
+}
+
+func (c *Client) usesCurrentOpenAIChatFields(model string) bool {
+	if !strings.EqualFold(strings.TrimSpace(c.Provider), "openai") {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.TrimPrefix(normalized, "openai/")
+	return strings.HasPrefix(normalized, "gpt-5") ||
+		strings.HasPrefix(normalized, "o1") ||
+		strings.HasPrefix(normalized, "o3") ||
+		strings.HasPrefix(normalized, "o4")
 }
 
 // applyCacheControl injects cache_control: {"type": "ephemeral"} into system
