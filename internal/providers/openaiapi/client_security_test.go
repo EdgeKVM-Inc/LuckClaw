@@ -2,12 +2,19 @@ package openaiapi
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 const expectedMaxChatResponseBodyBytes = 512 * 1024
@@ -75,6 +82,95 @@ func TestChatRequestResponseFormatIsOptional(t *testing.T) {
 	if !ok || format["type"] != "json_schema" || jsonSchema["name"] != "turn" ||
 		jsonSchema["strict"] != true || schema["additionalProperties"] != false {
 		t.Fatalf("structured response format missing: %s", encoded)
+	}
+}
+
+func TestProviderRootPoolLoadsCertifiFallback(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(server.Close)
+	certificate := server.TLS.Certificates[0].Certificate[0]
+	bundle := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate})
+	path := filepath.Join(t.TempDir(), "cacert.pem")
+	if err := os.WriteFile(path, bundle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	pool := loadProviderRootCAs(
+		func() (*x509.CertPool, error) { return x509.NewCertPool(), nil },
+		os.ReadFile,
+		[]string{filepath.Join(t.TempDir(), "missing.pem"), path},
+	)
+	if pool == nil {
+		t.Fatal("fallback root pool is nil")
+	}
+	if len(pool.Subjects()) != 1 {
+		t.Fatalf("fallback subjects = %d, want 1", len(pool.Subjects()))
+	}
+
+	client := newHTTPClientWithProxy(nil, time.Second, pool)
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatalf("fallback TLS request: %v", err)
+	}
+	response.Body.Close()
+}
+
+func TestProviderCACandidatesHonorExplicitBundle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "explicit-cacert.pem")
+	t.Setenv("SSL_CERT_FILE", "  "+path+"  ")
+	candidates := providerCACandidates()
+	if len(candidates) == 0 {
+		t.Fatal("explicit CA candidate was omitted")
+	}
+	if candidates[0] != path {
+		t.Fatalf("first CA candidate = %q, want %q", candidates[0], path)
+	}
+}
+
+func TestProviderCACandidatesDiscoverLuckfoxCertifiBundle(t *testing.T) {
+	const luckfoxBundle = "/usr/lib/python3.11/site-packages/certifi/cacert.pem"
+	expectedPatterns := []string{
+		"/usr/lib/python*/site-packages/certifi/cacert.pem",
+		"/usr/local/lib/python*/site-packages/certifi/cacert.pem",
+	}
+	var patterns []string
+	candidates := providerCACandidatesWithGlob("", func(pattern string) ([]string, error) {
+		patterns = append(patterns, pattern)
+		if pattern == "/usr/lib/python*/site-packages/certifi/cacert.pem" {
+			return []string{luckfoxBundle}, nil
+		}
+		return nil, nil
+	})
+	if !slices.Equal(patterns, expectedPatterns) {
+		t.Fatalf("glob patterns = %v, want %v", patterns, expectedPatterns)
+	}
+	if len(candidates) != 1 || candidates[0] != luckfoxBundle {
+		t.Fatalf("CA candidates = %v, want [%s]", candidates, luckfoxBundle)
+	}
+}
+
+func TestProviderRootPoolPreservesHealthySystemTrust(t *testing.T) {
+	systemPool := x509.NewCertPool()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(server.Close)
+	certificate := server.TLS.Certificates[0].Certificate[0]
+	systemPool.AddCert(server.Certificate())
+	candidate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate})
+	read := false
+
+	pool := loadProviderRootCAs(
+		func() (*x509.CertPool, error) { return systemPool, nil },
+		func(string) ([]byte, error) {
+			read = true
+			return candidate, nil
+		},
+		[]string{"unused-certifi.pem"},
+	)
+	if pool != systemPool || len(pool.Subjects()) != 1 {
+		t.Fatal("healthy system trust was replaced")
+	}
+	if read {
+		t.Fatal("certifi fallback was read for a healthy system pool")
 	}
 }
 

@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -223,7 +227,13 @@ func SanitizeEmptyContent(msgs []Message) []Message {
 // NewHTTPClientWithProxy creates an HTTP client with proxy configuration from WebToolsConfig.
 // If webCfg is nil or has no proxy settings, falls back to http.ProxyFromEnvironment.
 func NewHTTPClientWithProxy(webCfg *config.WebToolsConfig, timeout time.Duration) *http.Client {
-	transport := &http.Transport{}
+	return newHTTPClientWithProxy(webCfg, timeout, providerRootCAs())
+}
+
+func newHTTPClientWithProxy(webCfg *config.WebToolsConfig, timeout time.Duration, roots *x509.CertPool) *http.Client {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: roots},
+	}
 	if webCfg != nil && (webCfg.HTTPProxy != "" || webCfg.HTTPSProxy != "" || webCfg.AllProxy != "") {
 		transport.Proxy = webCfg.ProxyFunc()
 	} else {
@@ -234,6 +244,55 @@ func NewHTTPClientWithProxy(webCfg *config.WebToolsConfig, timeout time.Duration
 		Transport:     transport,
 		CheckRedirect: rejectProviderRedirect,
 	}
+}
+
+func providerRootCAs() *x509.CertPool {
+	return loadProviderRootCAs(x509.SystemCertPool, os.ReadFile, providerCACandidates())
+}
+
+func providerCACandidates() []string {
+	return providerCACandidatesWithGlob(os.Getenv("SSL_CERT_FILE"), filepath.Glob)
+}
+
+func providerCACandidatesWithGlob(
+	explicitBundle string,
+	glob func(string) ([]string, error),
+) []string {
+	candidates := make([]string, 0, 8)
+	if explicit := strings.TrimSpace(explicitBundle); explicit != "" {
+		candidates = append(candidates, explicit)
+	}
+	for _, pattern := range []string{
+		"/usr/lib/python*/site-packages/certifi/cacert.pem",
+		"/usr/local/lib/python*/site-packages/certifi/cacert.pem",
+	} {
+		matches, err := glob(pattern)
+		if err == nil {
+			candidates = append(candidates, matches...)
+		}
+	}
+	return candidates
+}
+
+func loadProviderRootCAs(
+	systemPool func() (*x509.CertPool, error),
+	readFile func(string) ([]byte, error),
+	candidates []string,
+) *x509.CertPool {
+	pool, err := systemPool()
+	if pool != nil && len(pool.Subjects()) > 0 {
+		return pool
+	}
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	for _, candidate := range candidates {
+		pem, readErr := readFile(candidate)
+		if readErr == nil {
+			pool.AppendCertsFromPEM(pem)
+		}
+	}
+	return pool
 }
 
 func rejectProviderRedirect(*http.Request, []*http.Request) error {
