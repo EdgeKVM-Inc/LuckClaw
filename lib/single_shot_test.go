@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"luckclaw/internal/config"
+	"luckclaw/internal/providers/openaiapi"
 )
 
 type singleShotProviderRequest struct {
@@ -35,6 +37,39 @@ type singleShotProviderRequest struct {
 		Content any    `json:"content"`
 	} `json:"messages"`
 	Tools []any `json:"tools"`
+}
+
+func TestProviderFailuresAreMappedWithoutProviderDetails(t *testing.T) {
+	for _, test := range []struct {
+		reason openaiapi.FailoverReason
+		status int
+		want   string
+	}{
+		{reason: openaiapi.ReasonRateLimit, status: http.StatusTooManyRequests, want: "provider_rate_limited"},
+		{reason: openaiapi.ReasonAuth, status: http.StatusUnauthorized, want: "provider_auth_failed"},
+		{reason: openaiapi.ReasonAuth, status: http.StatusForbidden, want: "provider_permission_denied"},
+		{reason: openaiapi.ReasonBilling, status: http.StatusPaymentRequired, want: "provider_quota_exceeded"},
+		{reason: openaiapi.ReasonTimeout, want: "provider_timed_out"},
+		{reason: openaiapi.ReasonServer, status: http.StatusServiceUnavailable, want: "provider_unavailable"},
+		{reason: openaiapi.ReasonFormat, status: http.StatusBadRequest, want: "provider_endpoint_incompatible"},
+		{reason: openaiapi.ReasonModelNotFound, status: http.StatusBadRequest, want: "provider_model_not_found"},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			secret := "provider-secret-response-body"
+			err := classifyProviderFailure(&openaiapi.FailoverError{
+				Reason: test.reason,
+				Status: test.status,
+				Body:   secret,
+			})
+			var failure *ProviderFailure
+			if !errors.As(err, &failure) || failure.Code != test.want {
+				t.Fatalf("failure=%v", err)
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatal("provider detail escaped through bounded failure")
+			}
+		})
+	}
 }
 
 func TestSingleShotBotUsesCurrentOpenAIChatFields(t *testing.T) {

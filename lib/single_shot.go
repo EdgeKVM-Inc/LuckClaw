@@ -3,6 +3,7 @@ package lib
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"time"
 
@@ -10,6 +11,16 @@ import (
 	"luckclaw/internal/logging"
 	"luckclaw/internal/providers/openaiapi"
 )
+
+// ProviderFailure is the bounded provider classification exposed to the
+// controller adapter. It never includes response bodies, headers, or secrets.
+type ProviderFailure struct {
+	Code string
+}
+
+func (e *ProviderFailure) Error() string {
+	return "single-shot provider call failed"
+}
 
 // SingleShotBot sends one stateless, two-message request to one explicitly
 // selected provider. It deliberately has no agent loop, tools, skills,
@@ -94,7 +105,7 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string, outputR
 		ResponseFormat:  b.responseFormat,
 	})
 	if err != nil {
-		return "", errors.New("single-shot provider call failed")
+		return "", classifyProviderFailure(err)
 	}
 	if len(result.ToolCalls) != 0 {
 		return "", errors.New("single-shot provider returned a tool call")
@@ -103,6 +114,53 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string, outputR
 		return "", errors.New("single-shot provider returned an empty response")
 	}
 	return result.Content, nil
+}
+
+func classifyProviderFailure(err error) error {
+	var providerError *openaiapi.FailoverError
+	if !errors.As(err, &providerError) {
+		return &ProviderFailure{Code: "provider_request_failed"}
+	}
+	code := "provider_request_failed"
+	switch providerError.Reason {
+	case openaiapi.ReasonRateLimit:
+		code = "provider_rate_limited"
+	case openaiapi.ReasonAuth:
+		if providerError.Status == 403 {
+			code = "provider_permission_denied"
+		} else {
+			code = "provider_auth_failed"
+		}
+	case openaiapi.ReasonBilling:
+		code = "provider_quota_exceeded"
+	case openaiapi.ReasonTimeout:
+		code = "provider_timed_out"
+	case openaiapi.ReasonServer:
+		code = "provider_unavailable"
+	case openaiapi.ReasonFormat:
+		code = "provider_endpoint_incompatible"
+	case openaiapi.ReasonModelNotFound:
+		code = "provider_model_not_found"
+	case openaiapi.ReasonUnknown:
+		var dnsError *net.DNSError
+		switch {
+		case errors.As(providerError.Wrapped, &dnsError):
+			code = "provider_dns_failed"
+		case providerError.Wrapped != nil && containsTLSError(providerError.Wrapped.Error()):
+			code = "provider_tls_failed"
+		default:
+			code = "provider_network_failed"
+		}
+	}
+	return &ProviderFailure{Code: code}
+}
+
+func containsTLSError(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "tls") ||
+		strings.Contains(lower, "x509") ||
+		strings.Contains(lower, "certificate") ||
+		strings.Contains(lower, "unknown authority")
 }
 
 func validOutputReserve(outputReserveTokens, modelWindowTokens int) bool {
