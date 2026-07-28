@@ -46,13 +46,14 @@ func TestProviderFailuresAreMappedWithoutProviderDetails(t *testing.T) {
 		want   string
 	}{
 		{reason: openaiapi.ReasonRateLimit, status: http.StatusTooManyRequests, want: "provider_rate_limited"},
-		{reason: openaiapi.ReasonAuth, status: http.StatusUnauthorized, want: "provider_auth_failed"},
+		{reason: openaiapi.ReasonAuth, status: http.StatusUnauthorized, want: "provider_auth_rejected"},
 		{reason: openaiapi.ReasonAuth, status: http.StatusForbidden, want: "provider_permission_denied"},
 		{reason: openaiapi.ReasonBilling, status: http.StatusPaymentRequired, want: "provider_quota_exceeded"},
-		{reason: openaiapi.ReasonTimeout, want: "provider_timed_out"},
+		{reason: openaiapi.ReasonTimeout, want: "provider_timeout"},
 		{reason: openaiapi.ReasonServer, status: http.StatusServiceUnavailable, want: "provider_unavailable"},
-		{reason: openaiapi.ReasonFormat, status: http.StatusBadRequest, want: "provider_endpoint_incompatible"},
+		{reason: openaiapi.ReasonFormat, status: http.StatusBadRequest, want: "provider_incompatible"},
 		{reason: openaiapi.ReasonModelNotFound, status: http.StatusBadRequest, want: "provider_model_not_found"},
+		{reason: openaiapi.ReasonContextWindow, status: http.StatusBadRequest, want: "model_context_too_small"},
 	} {
 		t.Run(test.want, func(t *testing.T) {
 			secret := "provider-secret-response-body"
@@ -60,7 +61,7 @@ func TestProviderFailuresAreMappedWithoutProviderDetails(t *testing.T) {
 				Reason: test.reason,
 				Status: test.status,
 				Body:   secret,
-			})
+			}, "openai")
 			var failure *ProviderFailure
 			if !errors.As(err, &failure) || failure.Code != test.want {
 				t.Fatalf("failure=%v", err)
@@ -69,6 +70,18 @@ func TestProviderFailuresAreMappedWithoutProviderDetails(t *testing.T) {
 				t.Fatal("provider detail escaped through bounded failure")
 			}
 		})
+	}
+}
+
+func TestMissingOllamaModelUsesLocalFailureCategory(t *testing.T) {
+	err := classifyProviderFailure(&openaiapi.FailoverError{
+		Reason: openaiapi.ReasonModelNotFound,
+		Status: http.StatusNotFound,
+		Body:   "private provider response",
+	}, "ollama")
+	var failure *ProviderFailure
+	if !errors.As(err, &failure) || failure.Code != "local_model_unavailable" {
+		t.Fatalf("failure=%v", err)
 	}
 }
 
@@ -314,6 +327,11 @@ func TestSingleShotBotNeverRetriesOrExecutesReturnedTools(t *testing.T) {
 			defer cancel()
 			if _, err := bot.Chat(ctx, "current context", "ignored-session", 6_400); err == nil {
 				t.Fatal("unsafe provider result accepted")
+			} else if test.name != "transient provider error" {
+				var failure *ProviderFailure
+				if !errors.As(err, &failure) || failure.Code != "invalid_model_reply" {
+					t.Fatalf("failure=%v, want invalid_model_reply", err)
+				}
 			}
 			if calls.Load() != 1 {
 				t.Fatalf("provider calls=%d, want 1", calls.Load())

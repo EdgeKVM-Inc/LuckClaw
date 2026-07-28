@@ -17,6 +17,7 @@ const (
 	ReasonServer        FailoverReason = "server"
 	ReasonFormat        FailoverReason = "format"
 	ReasonModelNotFound FailoverReason = "model_not_found"
+	ReasonContextWindow FailoverReason = "context_window"
 	ReasonUnknown       FailoverReason = "unknown"
 )
 
@@ -55,6 +56,8 @@ func (e *FailoverError) UserMessage() string {
 		return "The AI service is temporarily unavailable. Please try again later."
 	case ReasonModelNotFound:
 		return "Model not found or not available for this provider. Use /model to switch model, or run `luckclaw models list` to see available models."
+	case ReasonContextWindow:
+		return "The configured model context window is too small for this request."
 	default:
 		return e.Error()
 	}
@@ -80,14 +83,18 @@ func ClassifyHTTPError(status int, body string) *FailoverError {
 
 	switch {
 	case status == 429:
-		fe.Reason = ReasonRateLimit
+		if classifyByBody(body) == ReasonBilling {
+			fe.Reason = ReasonBilling
+		} else {
+			fe.Reason = ReasonRateLimit
+		}
 	case status == 401 || status == 403:
 		fe.Reason = ReasonAuth
 	case status == 402:
 		fe.Reason = ReasonBilling
 	case status == 408:
 		fe.Reason = ReasonTimeout
-	case status == 400:
+	case status == 400 || status == 404 || status == 413:
 		fe.Reason = classifyByBody(body)
 	case status >= 500:
 		fe.Reason = ReasonServer
@@ -119,7 +126,7 @@ func ClassifyNetworkError(err error) *FailoverError {
 	case strings.Contains(msg, "connection refused"),
 		strings.Contains(msg, "connection reset"),
 		strings.Contains(msg, "eof"):
-		fe.Reason = ReasonServer
+		fe.Reason = ReasonUnknown
 	default:
 		fe.Reason = ReasonUnknown
 	}
@@ -137,7 +144,7 @@ func classifyByBody(body string) FailoverReason {
 		strings.Contains(lower, "model does not exist") || strings.Contains(lower, "model not found"):
 		return ReasonModelNotFound
 	case strings.Contains(lower, "context length") || strings.Contains(lower, "too long") || strings.Contains(lower, "maximum context"):
-		return ReasonFormat
+		return ReasonContextWindow
 	default:
 		return ReasonFormat
 	}

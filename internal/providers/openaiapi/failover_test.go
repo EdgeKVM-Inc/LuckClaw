@@ -1,0 +1,44 @@
+package openaiapi
+
+import (
+	"errors"
+	"net"
+	"net/http"
+	"testing"
+)
+
+func TestHTTPFailureClassificationSeparatesProductionCategories(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		want   FailoverReason
+	}{
+		{name: "rate limit", status: http.StatusTooManyRequests, body: `{"code":"rate_limit_exceeded"}`, want: ReasonRateLimit},
+		{name: "quota", status: http.StatusTooManyRequests, body: `{"code":"insufficient_quota"}`, want: ReasonBilling},
+		{name: "authentication", status: http.StatusUnauthorized, want: ReasonAuth},
+		{name: "permission", status: http.StatusForbidden, want: ReasonAuth},
+		{name: "missing model", status: http.StatusNotFound, body: `{"code":"model_not_found"}`, want: ReasonModelNotFound},
+		{name: "context window", status: http.StatusBadRequest, body: `{"message":"maximum context length exceeded"}`, want: ReasonContextWindow},
+		{name: "incompatible", status: http.StatusBadRequest, body: `{"message":"unsupported request format"}`, want: ReasonFormat},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ClassifyHTTPError(test.status, test.body).Reason; got != test.want {
+				t.Fatalf("reason=%q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestNetworkFailureClassificationPreservesTransportCause(t *testing.T) {
+	dns := &net.DNSError{Name: "private.invalid", Err: "no such host"}
+	failure := ClassifyNetworkError(dns)
+	if failure.Reason != ReasonUnknown || !errors.Is(failure, dns) {
+		t.Fatalf("failure=%#v", failure)
+	}
+
+	timeout := &net.DNSError{Name: "private.invalid", IsTimeout: true}
+	if got := ClassifyNetworkError(timeout).Reason; got != ReasonTimeout {
+		t.Fatalf("timeout reason=%q", got)
+	}
+}

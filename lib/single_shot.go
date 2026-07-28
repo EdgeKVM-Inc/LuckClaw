@@ -105,18 +105,18 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string, outputR
 		ResponseFormat:  b.responseFormat,
 	})
 	if err != nil {
-		return "", classifyProviderFailure(err)
+		return "", classifyProviderFailure(err, b.provider.Provider)
 	}
 	if len(result.ToolCalls) != 0 {
-		return "", errors.New("single-shot provider returned a tool call")
+		return "", &ProviderFailure{Code: "invalid_model_reply"}
 	}
 	if strings.TrimSpace(result.Content) == "" {
-		return "", errors.New("single-shot provider returned an empty response")
+		return "", &ProviderFailure{Code: "invalid_model_reply"}
 	}
 	return result.Content, nil
 }
 
-func classifyProviderFailure(err error) error {
+func classifyProviderFailure(err error, provider string) error {
 	var providerError *openaiapi.FailoverError
 	if !errors.As(err, &providerError) {
 		return &ProviderFailure{Code: "provider_request_failed"}
@@ -129,18 +129,24 @@ func classifyProviderFailure(err error) error {
 		if providerError.Status == 403 {
 			code = "provider_permission_denied"
 		} else {
-			code = "provider_auth_failed"
+			code = "provider_auth_rejected"
 		}
 	case openaiapi.ReasonBilling:
 		code = "provider_quota_exceeded"
 	case openaiapi.ReasonTimeout:
-		code = "provider_timed_out"
+		code = "provider_timeout"
 	case openaiapi.ReasonServer:
 		code = "provider_unavailable"
 	case openaiapi.ReasonFormat:
-		code = "provider_endpoint_incompatible"
+		code = "provider_incompatible"
 	case openaiapi.ReasonModelNotFound:
-		code = "provider_model_not_found"
+		if strings.EqualFold(strings.TrimSpace(provider), "ollama") {
+			code = "local_model_unavailable"
+		} else {
+			code = "provider_model_not_found"
+		}
+	case openaiapi.ReasonContextWindow:
+		code = "model_context_too_small"
 	case openaiapi.ReasonUnknown:
 		var dnsError *net.DNSError
 		switch {
@@ -149,7 +155,7 @@ func classifyProviderFailure(err error) error {
 		case providerError.Wrapped != nil && containsTLSError(providerError.Wrapped.Error()):
 			code = "provider_tls_failed"
 		default:
-			code = "provider_network_failed"
+			code = "provider_unreachable"
 		}
 	}
 	return &ProviderFailure{Code: code}
