@@ -339,6 +339,50 @@ func TestSingleShotBotNeverRetriesOrExecutesReturnedTools(t *testing.T) {
 	}
 }
 
+func TestSingleShotBotClassifiesEmptyProviderRepliesWithoutLeakingDetails(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		finishReason string
+		refusal      string
+		want         string
+	}{
+		{name: "output exhausted", finishReason: "length", want: "provider_output_exhausted"},
+		{name: "content filter", finishReason: "content_filter", want: "provider_refused"},
+		{name: "explicit refusal", finishReason: "stop", refusal: "private refusal detail", want: "provider_refused"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				response.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(response).Encode(map[string]any{
+					"choices": []any{map[string]any{
+						"finish_reason": test.finishReason,
+						"message": map[string]any{
+							"content": "", "refusal": test.refusal, "tool_calls": []any{},
+						},
+					}},
+					"usage": map[string]any{},
+				})
+			}))
+			t.Cleanup(provider.Close)
+
+			configPath, _ := writeSingleShotConfig(t, provider.URL)
+			bot, err := NewSingleShotBot(configPath, "canonical prompt\n")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(bot.Close)
+			_, err = bot.Chat(context.Background(), "current context", "ignored-session", 6_400)
+			var failure *ProviderFailure
+			if !errors.As(err, &failure) || failure.Code != test.want {
+				t.Fatalf("failure=%v, want %s", err, test.want)
+			}
+			if test.refusal != "" && strings.Contains(err.Error(), test.refusal) {
+				t.Fatal("provider refusal escaped through bounded failure")
+			}
+		})
+	}
+}
+
 func TestSingleShotBotRejectsProviderRedirect(t *testing.T) {
 	var sourceHits atomic.Int32
 	var destinationHits atomic.Int32

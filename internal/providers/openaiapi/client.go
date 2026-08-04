@@ -145,6 +145,7 @@ type ChatResponse struct {
 		Message      struct {
 			Content          string     `json:"content"`
 			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			Refusal          string     `json:"refusal,omitempty"`
 			ToolCalls        []ToolCall `json:"tool_calls"`
 		} `json:"message"`
 	} `json:"choices"`
@@ -158,6 +159,7 @@ type ChatResponse struct {
 type ChatResult struct {
 	Content          string
 	ReasoningContent string
+	Refusal          string
 	ToolCalls        []ToolCall
 	FinishReason     string
 	Usage            struct {
@@ -370,6 +372,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) 
 	result := ChatResult{
 		Content:          msg.Content,
 		ReasoningContent: msg.ReasoningContent,
+		Refusal:          msg.Refusal,
 		ToolCalls:        msg.ToolCalls,
 		FinishReason:     choice.FinishReason,
 	}

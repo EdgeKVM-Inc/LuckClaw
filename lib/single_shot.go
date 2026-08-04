@@ -111,6 +111,12 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string, outputR
 		return "", &ProviderFailure{Code: "invalid_model_reply"}
 	}
 	if strings.TrimSpace(result.Content) == "" {
+		if strings.TrimSpace(result.Refusal) != "" || strings.EqualFold(result.FinishReason, "content_filter") {
+			return "", &ProviderFailure{Code: "provider_refused"}
+		}
+		if strings.EqualFold(result.FinishReason, "length") {
+			return "", &ProviderFailure{Code: "provider_output_exhausted"}
+		}
 		return "", &ProviderFailure{Code: "invalid_model_reply"}
 	}
 	return result.Content, nil
