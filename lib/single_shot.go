@@ -73,8 +73,8 @@ func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
 		SupportsPromptCaching: false,
 	}
 	responseFormat := &openaiapi.ResponseFormat{Type: "json_object"}
-	if providerName == "ollama" {
-		responseFormat = swarmboardTurnResponseFormat()
+	if providerName == "openai" || providerName == "ollama" {
+		responseFormat = swarmboardTurnResponseFormat(providerName == "ollama")
 	}
 	return &SingleShotBot{
 		config:         cfg,
@@ -183,7 +183,7 @@ func validOutputReserve(outputReserveTokens, modelWindowTokens int) bool {
 	return outputReserveTokens >= minimum && outputReserveTokens < modelWindowTokens
 }
 
-func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
+func swarmboardTurnResponseFormat(strict bool) *openaiapi.ResponseFormat {
 	effectDeclaration := map[string]any{
 		"oneOf": []any{
 			map[string]any{
@@ -300,29 +300,50 @@ func swarmboardTurnResponseFormat() *openaiapi.ResponseFormat {
 			"requestedLimits",
 		},
 	}
-	turn := func(status string, proposalSchema map[string]any) map[string]any {
-		return map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]any{
-				"status":   map[string]any{"const": status},
-				"reply":    map[string]any{"type": "string", "minLength": 1},
-				"proposal": proposalSchema,
+	clarification := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"kind": map[string]any{
+				"type": "string",
+				"enum": []string{"ambiguous_resource", "missing_argument", "missing_decision"},
 			},
-			"required": []string{"status", "reply", "proposal"},
-		}
+			"field": map[string]any{"type": "string", "minLength": 1},
+			"resourceType": map[string]any{
+				"anyOf": []any{
+					map[string]any{"type": "string", "minLength": 1},
+					map[string]any{"type": "null"},
+				},
+			},
+			"candidateValues": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string", "minLength": 1},
+			},
+		},
+		"required": []string{"kind", "field", "resourceType", "candidateValues"},
 	}
 	return &openaiapi.ResponseFormat{
 		Type: "json_schema",
 		JSONSchema: &openaiapi.JSONSchemaResponseFormat{
 			Name:   "swarmboard_turn",
-			Strict: true,
+			Strict: strict,
 			Schema: map[string]any{
-				"oneOf": []any{
-					turn("answered", map[string]any{"type": "null"}),
-					turn("awaiting_clarification", map[string]any{"type": "null"}),
-					turn("execution_proposed", proposal),
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"status": map[string]any{
+						"type": "string",
+						"enum": []string{"answered", "awaiting_clarification", "execution_proposed"},
+					},
+					"reply": map[string]any{"type": "string", "minLength": 1},
+					"proposal": map[string]any{
+						"anyOf": []any{proposal, map[string]any{"type": "null"}},
+					},
+					"clarification": map[string]any{
+						"anyOf": []any{clarification, map[string]any{"type": "null"}},
+					},
 				},
+				"required": []string{"status", "reply"},
 			},
 		},
 	}

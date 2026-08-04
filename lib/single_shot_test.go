@@ -111,6 +111,10 @@ func TestSingleShotBotUsesCurrentOpenAIChatFields(t *testing.T) {
 	if request.MaxTokens != 0 || request.Temperature != nil {
 		t.Fatalf("current OpenAI request kept unsupported controls: %#v", request)
 	}
+	if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_schema" ||
+		request.ResponseFormat.JSONSchema == nil || request.ResponseFormat.JSONSchema.Strict {
+		t.Fatalf("current OpenAI response_format=%#v, want non-strict swarmboard_turn schema", request.ResponseFormat)
+	}
 }
 
 func TestSingleShotBotSendsOnlyCanonicalSystemAndCurrentContext(t *testing.T) {
@@ -174,8 +178,9 @@ func TestSingleShotBotSendsOnlyCanonicalSystemAndCurrentContext(t *testing.T) {
 		if request.Model != "test-model" || request.MaxTokens != 6_400 || len(request.Tools) != 0 || len(request.Messages) != 2 {
 			t.Fatalf("request %d = %#v", index+1, request)
 		}
-		if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_object" {
-			t.Fatalf("request %d response_format=%#v, want json_object", index+1, request.ResponseFormat)
+		if request.ResponseFormat == nil || request.ResponseFormat.Type != "json_schema" ||
+			request.ResponseFormat.JSONSchema == nil || request.ResponseFormat.JSONSchema.Strict {
+			t.Fatalf("request %d response_format=%#v, want non-strict swarmboard_turn schema", index+1, request.ResponseFormat)
 		}
 		if request.Messages[0].Role != "system" || request.Messages[0].Content != systemPrompt ||
 			request.Messages[1].Role != "user" || request.Messages[1].Content != expectedContext {
@@ -229,23 +234,17 @@ func TestSingleShotBotUsesStrictTurnSchemaForOllama(t *testing.T) {
 		t.Fatalf("response_format=%#v, want strict swarmboard_turn schema", request.ResponseFormat)
 	}
 	schema := request.ResponseFormat.JSONSchema.Schema
-	branches, _ := schema["oneOf"].([]any)
-	if len(branches) != 3 {
+	properties, _ := schema["properties"].(map[string]any)
+	status, _ := properties["status"].(map[string]any)
+	proposalUnion, _ := properties["proposal"].(map[string]any)
+	proposalBranches, _ := proposalUnion["anyOf"].([]any)
+	clarificationUnion, _ := properties["clarification"].(map[string]any)
+	clarificationBranches, _ := clarificationUnion["anyOf"].([]any)
+	if schema["type"] != "object" || schema["additionalProperties"] != false ||
+		len(proposalBranches) != 2 || len(clarificationBranches) != 2 || status["enum"] == nil {
 		t.Fatalf("response schema is incomplete: %#v", schema)
 	}
-	for _, rawBranch := range branches {
-		branch, _ := rawBranch.(map[string]any)
-		properties, _ := branch["properties"].(map[string]any)
-		status, _ := properties["status"].(map[string]any)
-		proposal, _ := properties["proposal"].(map[string]any)
-		if branch["type"] != "object" || branch["additionalProperties"] != false ||
-			status["const"] == nil || proposal["type"] == nil {
-			t.Fatalf("response schema branch is incomplete: %#v", branch)
-		}
-	}
-	execution, _ := branches[2].(map[string]any)
-	executionProperties, _ := execution["properties"].(map[string]any)
-	proposal, _ := executionProperties["proposal"].(map[string]any)
+	proposal, _ := proposalBranches[0].(map[string]any)
 	proposalProperties, _ := proposal["properties"].(map[string]any)
 	inputs, _ := proposalProperties["inputs"].(map[string]any)
 	inputProperties, _ := inputs["properties"].(map[string]any)
