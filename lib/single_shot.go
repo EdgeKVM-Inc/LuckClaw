@@ -76,6 +76,12 @@ func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
 	if providerName == "openai" || providerName == "ollama" {
 		responseFormat = swarmboardTurnResponseFormat(providerName == "ollama")
 	}
+	if providerName == "anthropic" {
+		// Anthropic's OpenAI-compatible endpoint rejects response_format;
+		// the JSON reply shape is enforced by the system prompt and the
+		// caller-side reply validation instead.
+		responseFormat = nil
+	}
 	return &SingleShotBot{
 		config:         cfg,
 		provider:       provider,
