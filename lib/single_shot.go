@@ -31,6 +31,7 @@ type SingleShotBot struct {
 	model          string
 	modelWindow    int
 	systemPrompt   string
+	temperature    float64
 	responseFormat *openaiapi.ResponseFormat
 }
 
@@ -76,11 +77,14 @@ func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
 	if providerName == "openai" || providerName == "ollama" {
 		responseFormat = swarmboardTurnResponseFormat(providerName == "ollama")
 	}
+	temperature := cfg.Agents.Defaults.Temperature
 	if providerName == "anthropic" {
-		// Anthropic's OpenAI-compatible endpoint rejects response_format;
-		// the JSON reply shape is enforced by the system prompt and the
-		// caller-side reply validation instead.
+		// Anthropic's OpenAI-compatible endpoint rejects response_format, and
+		// current Claude models reject temperature outright ("`temperature` is
+		// deprecated for this model"). Omit both; the JSON reply shape is
+		// enforced by the system prompt and the caller-side reply validation.
 		responseFormat = nil
+		temperature = 0
 	}
 	return &SingleShotBot{
 		config:         cfg,
@@ -88,6 +92,7 @@ func NewSingleShotBot(configPath, systemPrompt string) (*SingleShotBot, error) {
 		model:          cfg.ModelIDForAPI(model),
 		modelWindow:    modelWindow,
 		systemPrompt:   systemPrompt,
+		temperature:    temperature,
 		responseFormat: responseFormat,
 	}, nil
 }
@@ -105,7 +110,7 @@ func (b *SingleShotBot) Chat(ctx context.Context, contextText, _ string, outputR
 			{Role: "system", Content: b.systemPrompt},
 			{Role: "user", Content: contextText},
 		},
-		Temperature:     b.config.Agents.Defaults.Temperature,
+		Temperature:     b.temperature,
 		MaxTokens:       outputReserveTokens,
 		ReasoningEffort: b.config.Agents.Defaults.ReasoningEffort,
 		ResponseFormat:  b.responseFormat,

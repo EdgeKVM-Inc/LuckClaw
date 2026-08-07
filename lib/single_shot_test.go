@@ -117,6 +117,43 @@ func TestSingleShotBotUsesCurrentOpenAIChatFields(t *testing.T) {
 	}
 }
 
+func TestSingleShotBotOmitsUnsupportedAnthropicControls(t *testing.T) {
+	// Anthropic's OpenAI-compatible endpoint rejects response_format, and
+	// current Claude models reject temperature ("`temperature` is deprecated
+	// for this model"), so an anthropic single-shot request must carry
+	// neither. The live symptom was every provider validation failing as
+	// provider_incompatible while the identical request without temperature
+	// succeeded.
+	var request singleShotProviderRequest
+	provider := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, raw *http.Request) {
+		if err := json.NewDecoder(raw.Body).Decode(&request); err != nil {
+			http.Error(response, "bad request", http.StatusBadRequest)
+			return
+		}
+		writeProviderReply(t, response, `{"status":"answered","reply":"bounded"}`, nil)
+	}))
+	t.Cleanup(provider.Close)
+
+	configPath, _ := writeSingleShotAnthropicConfig(t, provider.URL)
+	bot, err := NewSingleShotBot(configPath, "canonical prompt\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(bot.Close)
+	if _, err := bot.Chat(context.Background(), "current context", "session", 6_400); err != nil {
+		t.Fatal(err)
+	}
+	if request.Model != "claude-test" || request.MaxTokens != 6_400 {
+		t.Fatalf("anthropic request = %#v", request)
+	}
+	if request.Temperature != nil {
+		t.Fatalf("anthropic request kept temperature: %#v", request)
+	}
+	if request.ResponseFormat != nil {
+		t.Fatalf("anthropic request kept response_format: %#v", request)
+	}
+}
+
 func TestSingleShotBotSendsOnlyCanonicalSystemAndCurrentContext(t *testing.T) {
 	const (
 		systemPrompt  = "canonical AGENTS.md\nraw-byte-sentinel\n"
@@ -492,6 +529,23 @@ func writeSingleShotCurrentOpenAIConfig(t *testing.T, providerURL string) (strin
 	cfg.Providers.OpenAI.APIKey = "test-key"
 	cfg.Providers.OpenAI.APIBase = providerURL
 	cfg.Models.ContextWindow = map[string]int{"openai/gpt-5.6-terra": 32_000}
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	return configPath, workspace
+}
+
+func writeSingleShotAnthropicConfig(t *testing.T, providerURL string) (string, string) {
+	t.Helper()
+	workspace := t.TempDir()
+	cfg := config.Default()
+	cfg.Agents.Defaults.Workspace = workspace
+	cfg.Agents.Defaults.Model = "anthropic/claude-test"
+	cfg.Agents.Defaults.Provider = "anthropic"
+	cfg.Providers.Anthropic.APIKey = "test-key"
+	cfg.Providers.Anthropic.APIBase = providerURL
+	cfg.Models.ContextWindow = map[string]int{"anthropic/claude-test": 32_000}
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatal(err)
