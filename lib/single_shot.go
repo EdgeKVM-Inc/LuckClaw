@@ -199,11 +199,10 @@ func validOutputReserve(outputReserveTokens, modelWindowTokens int) bool {
 	if minimum < 4_000 {
 		minimum = 4_000
 	}
-	// Large windows must not force a large reserve: many models cap output
-	// tokens (commonly 8k) far below a fifth of their context window.
-	if minimum > 8_192 {
-		minimum = 8_192
-	}
+	// The reserve floor deliberately scales with the window, uncapped: the
+	// validation probe must request the same output reserve real turns
+	// request, so a window too large for the model's output cap fails at
+	// configuration time instead of on every later turn.
 	return outputReserveTokens >= minimum && outputReserveTokens < modelWindowTokens
 }
 
