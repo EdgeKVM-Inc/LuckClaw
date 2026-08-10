@@ -53,6 +53,7 @@ func TestProviderFailuresAreMappedWithoutProviderDetails(t *testing.T) {
 		{reason: openaiapi.ReasonServer, status: http.StatusServiceUnavailable, want: "provider_unavailable"},
 		{reason: openaiapi.ReasonFormat, status: http.StatusBadRequest, want: "provider_incompatible"},
 		{reason: openaiapi.ReasonBadParameter, status: http.StatusBadRequest, want: "provider_parameter_unsupported"},
+		{reason: openaiapi.ReasonOutputCap, status: http.StatusBadRequest, want: "model_output_limit_exceeded"},
 		{reason: openaiapi.ReasonModelNotFound, status: http.StatusBadRequest, want: "provider_model_not_found"},
 		{reason: openaiapi.ReasonContextWindow, status: http.StatusBadRequest, want: "model_context_too_small"},
 	} {

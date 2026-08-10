@@ -158,6 +158,8 @@ func classifyProviderFailure(err error, provider string) error {
 		code = "provider_incompatible"
 	case openaiapi.ReasonBadParameter:
 		code = "provider_parameter_unsupported"
+	case openaiapi.ReasonOutputCap:
+		code = "model_output_limit_exceeded"
 	case openaiapi.ReasonModelNotFound:
 		if strings.EqualFold(strings.TrimSpace(provider), "ollama") {
 			code = "local_model_unavailable"

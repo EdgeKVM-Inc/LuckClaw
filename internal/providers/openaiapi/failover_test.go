@@ -23,6 +23,8 @@ func TestHTTPFailureClassificationSeparatesProductionCategories(t *testing.T) {
 		{name: "context window", status: http.StatusBadRequest, body: `{"message":"maximum context length exceeded"}`, want: ReasonContextWindow},
 		{name: "deprecated parameter", status: http.StatusBadRequest, body: "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"`temperature` is deprecated for this model\"}}", want: ReasonBadParameter},
 		{name: "unsupported parameter", status: http.StatusBadRequest, body: `{"error":{"message":"Unsupported parameter: 'temperature' is not supported with this model.","code":"unsupported_parameter"}}`, want: ReasonBadParameter},
+		{name: "anthropic output cap", status: http.StatusBadRequest, body: `{"error":{"code":"invalid_request_error","message":"max_tokens: 200000 > 128000, which is the maximum allowed number of output tokens for claude-sonnet-5","type":"invalid_request_error"}}`, want: ReasonOutputCap},
+		{name: "openai output cap", status: http.StatusBadRequest, body: `{"error":{"message":"max_tokens is too large: 300000. This model supports at most 128000 completion tokens.","type":"invalid_request_error"}}`, want: ReasonOutputCap},
 		{name: "incompatible", status: http.StatusBadRequest, body: `{"message":"unsupported request format"}`, want: ReasonFormat},
 	} {
 		t.Run(test.name, func(t *testing.T) {
