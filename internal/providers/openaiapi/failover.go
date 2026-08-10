@@ -16,6 +16,7 @@ const (
 	ReasonTimeout       FailoverReason = "timeout"
 	ReasonServer        FailoverReason = "server"
 	ReasonFormat        FailoverReason = "format"
+	ReasonBadParameter  FailoverReason = "bad_parameter"
 	ReasonModelNotFound FailoverReason = "model_not_found"
 	ReasonContextWindow FailoverReason = "context_window"
 	ReasonUnknown       FailoverReason = "unknown"
@@ -54,6 +55,8 @@ func (e *FailoverError) UserMessage() string {
 		return "Request timed out. Please try again."
 	case ReasonServer:
 		return "The AI service is temporarily unavailable. Please try again later."
+	case ReasonBadParameter:
+		return "The provider rejected a request parameter that this model does not support (for example `temperature`). Adjust the request options or switch model."
 	case ReasonModelNotFound:
 		return "Model not found or not available for this provider. Use /model to switch model, or run `luckclaw models list` to see available models."
 	case ReasonContextWindow:
@@ -141,10 +144,15 @@ func classifyByBody(body string) FailoverReason {
 	case strings.Contains(lower, "quota") || strings.Contains(lower, "billing") || strings.Contains(lower, "insufficient_quota"):
 		return ReasonBilling
 	case strings.Contains(lower, "model not exist") || strings.Contains(lower, "model_not_found") ||
-		strings.Contains(lower, "model does not exist") || strings.Contains(lower, "model not found"):
+		strings.Contains(lower, "model does not exist") || strings.Contains(lower, "model not found") ||
+		strings.Contains(lower, "not_found_error"):
 		return ReasonModelNotFound
 	case strings.Contains(lower, "context length") || strings.Contains(lower, "too long") || strings.Contains(lower, "maximum context"):
 		return ReasonContextWindow
+	case strings.Contains(lower, "deprecated") || strings.Contains(lower, "unsupported parameter") ||
+		strings.Contains(lower, "unsupported_parameter") || strings.Contains(lower, "unsupported value") ||
+		strings.Contains(lower, "unknown parameter"):
+		return ReasonBadParameter
 	default:
 		return ReasonFormat
 	}

@@ -19,7 +19,10 @@ func TestHTTPFailureClassificationSeparatesProductionCategories(t *testing.T) {
 		{name: "authentication", status: http.StatusUnauthorized, want: ReasonAuth},
 		{name: "permission", status: http.StatusForbidden, want: ReasonAuth},
 		{name: "missing model", status: http.StatusNotFound, body: `{"code":"model_not_found"}`, want: ReasonModelNotFound},
+		{name: "missing anthropic model", status: http.StatusNotFound, body: `{"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-nope"}}`, want: ReasonModelNotFound},
 		{name: "context window", status: http.StatusBadRequest, body: `{"message":"maximum context length exceeded"}`, want: ReasonContextWindow},
+		{name: "deprecated parameter", status: http.StatusBadRequest, body: "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"`temperature` is deprecated for this model\"}}", want: ReasonBadParameter},
+		{name: "unsupported parameter", status: http.StatusBadRequest, body: `{"error":{"message":"Unsupported parameter: 'temperature' is not supported with this model.","code":"unsupported_parameter"}}`, want: ReasonBadParameter},
 		{name: "incompatible", status: http.StatusBadRequest, body: `{"message":"unsupported request format"}`, want: ReasonFormat},
 	} {
 		t.Run(test.name, func(t *testing.T) {

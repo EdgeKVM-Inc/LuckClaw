@@ -156,6 +156,8 @@ func classifyProviderFailure(err error, provider string) error {
 		code = "provider_unavailable"
 	case openaiapi.ReasonFormat:
 		code = "provider_incompatible"
+	case openaiapi.ReasonBadParameter:
+		code = "provider_parameter_unsupported"
 	case openaiapi.ReasonModelNotFound:
 		if strings.EqualFold(strings.TrimSpace(provider), "ollama") {
 			code = "local_model_unavailable"
@@ -196,6 +198,11 @@ func validOutputReserve(outputReserveTokens, modelWindowTokens int) bool {
 	}
 	if minimum < 4_000 {
 		minimum = 4_000
+	}
+	// Large windows must not force a large reserve: many models cap output
+	// tokens (commonly 8k) far below a fifth of their context window.
+	if minimum > 8_192 {
+		minimum = 8_192
 	}
 	return outputReserveTokens >= minimum && outputReserveTokens < modelWindowTokens
 }

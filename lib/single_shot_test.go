@@ -52,6 +52,7 @@ func TestProviderFailuresAreMappedWithoutProviderDetails(t *testing.T) {
 		{reason: openaiapi.ReasonTimeout, want: "provider_timeout"},
 		{reason: openaiapi.ReasonServer, status: http.StatusServiceUnavailable, want: "provider_unavailable"},
 		{reason: openaiapi.ReasonFormat, status: http.StatusBadRequest, want: "provider_incompatible"},
+		{reason: openaiapi.ReasonBadParameter, status: http.StatusBadRequest, want: "provider_parameter_unsupported"},
 		{reason: openaiapi.ReasonModelNotFound, status: http.StatusBadRequest, want: "provider_model_not_found"},
 		{reason: openaiapi.ReasonContextWindow, status: http.StatusBadRequest, want: "model_context_too_small"},
 	} {
@@ -460,10 +461,12 @@ func TestSingleShotBotUsesOnlyValidOutputReserve(t *testing.T) {
 	}{
 		{name: "8k exact cap", window: 8_000, outputReserve: 4_000, wantCall: true},
 		{name: "32k exact cap", window: 32_000, outputReserve: 6_400, wantCall: true},
+		{name: "200k capped minimum", window: 200_000, outputReserve: 8_192, wantCall: true},
 		{name: "zero", window: 32_000, outputReserve: 0},
 		{name: "negative", window: 32_000, outputReserve: -1},
 		{name: "below 8k minimum", window: 8_000, outputReserve: 3_999},
 		{name: "below 32k minimum", window: 32_000, outputReserve: 6_399},
+		{name: "below 200k capped minimum", window: 200_000, outputReserve: 8_191},
 		{name: "reaches window", window: 32_000, outputReserve: 32_000},
 	} {
 		t.Run(test.name, func(t *testing.T) {
