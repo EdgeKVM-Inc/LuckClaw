@@ -347,6 +347,44 @@ func swarmboardTurnResponseFormat(strict bool) *openaiapi.ResponseFormat {
 		},
 		"required": []string{"kind", "field", "resourceType", "candidateValues"},
 	}
+	groundingSelector := map[string]any{
+		"type":        "array",
+		"maxItems":    8,
+		"uniqueItems": true,
+		"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 128},
+	}
+	grounding := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"queries": map[string]any{
+				"type":     "array",
+				"minItems": 1,
+				"maxItems": 4,
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type": "string",
+							"enum": []string{"app_schema", "field_values", "devices", "health", "workflows"},
+						},
+						"appIds":    groundingSelector,
+						"deviceIds": groundingSelector,
+						"fieldPaths": map[string]any{
+							"type":        "array",
+							"maxItems":    8,
+							"uniqueItems": true,
+							"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
+						},
+					},
+					// Selectors are optional per kind; only the read kind is required.
+					"required": []string{"kind"},
+				},
+			},
+		},
+		"required": []string{"queries"},
+	}
 	return &openaiapi.ResponseFormat{
 		Type: "json_schema",
 		JSONSchema: &openaiapi.JSONSchemaResponseFormat{
@@ -358,7 +396,7 @@ func swarmboardTurnResponseFormat(strict bool) *openaiapi.ResponseFormat {
 				"properties": map[string]any{
 					"status": map[string]any{
 						"type": "string",
-						"enum": []string{"answered", "awaiting_clarification", "execution_proposed"},
+						"enum": []string{"answered", "awaiting_clarification", "execution_proposed", "needs_grounding"},
 					},
 					"reply": map[string]any{"type": "string", "minLength": 1},
 					"proposal": map[string]any{
@@ -366,6 +404,9 @@ func swarmboardTurnResponseFormat(strict bool) *openaiapi.ResponseFormat {
 					},
 					"clarification": map[string]any{
 						"anyOf": []any{clarification, map[string]any{"type": "null"}},
+					},
+					"grounding": map[string]any{
+						"anyOf": []any{grounding, map[string]any{"type": "null"}},
 					},
 				},
 				"required": []string{"status", "reply"},

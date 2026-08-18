@@ -283,6 +283,31 @@ func TestSingleShotBotUsesStrictTurnSchemaForOllama(t *testing.T) {
 		len(proposalBranches) != 2 || len(clarificationBranches) != 2 || status["enum"] == nil {
 		t.Fatalf("response schema is incomplete: %#v", schema)
 	}
+	statusEnum, _ := status["enum"].([]any)
+	groundingUnion, _ := properties["grounding"].(map[string]any)
+	groundingBranches, _ := groundingUnion["anyOf"].([]any)
+	if len(statusEnum) != 4 || !schemaEnumContains(statusEnum, "needs_grounding") || len(groundingBranches) != 2 {
+		t.Fatalf("grounding outcome is absent from the turn schema: status=%#v grounding=%#v", status, groundingUnion)
+	}
+	grounding, _ := groundingBranches[0].(map[string]any)
+	groundingProperties, _ := grounding["properties"].(map[string]any)
+	queries, _ := groundingProperties["queries"].(map[string]any)
+	query, _ := queries["items"].(map[string]any)
+	queryProperties, _ := query["properties"].(map[string]any)
+	queryKind, _ := queryProperties["kind"].(map[string]any)
+	queryKindEnum, _ := queryKind["enum"].([]any)
+	appIDs, _ := queryProperties["appIds"].(map[string]any)
+	appIDItems, _ := appIDs["items"].(map[string]any)
+	fieldPaths, _ := queryProperties["fieldPaths"].(map[string]any)
+	fieldPathItems, _ := fieldPaths["items"].(map[string]any)
+	if grounding["additionalProperties"] != false || query["additionalProperties"] != false ||
+		queries["minItems"] != float64(1) || queries["maxItems"] != float64(4) || len(queryKindEnum) != 5 ||
+		!schemaEnumContains(queryKindEnum, "app_schema") || !schemaEnumContains(queryKindEnum, "field_values") ||
+		queryProperties["deviceIds"] == nil || appIDs["maxItems"] != float64(8) ||
+		appIDItems["maxLength"] != float64(128) || fieldPaths["maxItems"] != float64(8) ||
+		fieldPathItems["maxLength"] != float64(256) {
+		t.Fatalf("grounding query schema is unbounded: %#v", grounding)
+	}
 	proposal, _ := proposalBranches[0].(map[string]any)
 	proposalProperties, _ := proposal["properties"].(map[string]any)
 	inputs, _ := proposalProperties["inputs"].(map[string]any)
@@ -571,6 +596,15 @@ func writeSingleShotOllamaConfig(t *testing.T, providerURL string) (string, stri
 		t.Fatal(err)
 	}
 	return configPath, workspace
+}
+
+func schemaEnumContains(values []any, want string) bool {
+	for _, value := range values {
+		if text, _ := value.(string); text == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeProviderReply(t *testing.T, response http.ResponseWriter, content string, tools []map[string]any) {
