@@ -190,22 +190,23 @@ func containsTLSError(message string) bool {
 		strings.Contains(lower, "unknown authority")
 }
 
+// minimumOutputReserveTokens is the smallest completion budget a single-shot
+// turn may request, regardless of the model window.
+const minimumOutputReserveTokens = 4_000
+
 func validOutputReserve(outputReserveTokens, modelWindowTokens int) bool {
 	if modelWindowTokens <= 0 {
 		return false
 	}
-	minimum := modelWindowTokens / 5
-	if modelWindowTokens%5 != 0 {
-		minimum++
-	}
-	if minimum < 4_000 {
-		minimum = 4_000
-	}
-	// The reserve floor deliberately scales with the window, uncapped: the
-	// validation probe must request the same output reserve real turns
-	// request, so a window too large for the model's output cap fails at
-	// configuration time instead of on every later turn.
-	return outputReserveTokens >= minimum && outputReserveTokens < modelWindowTokens
+	// A fixed floor, not a window share. Output capacity is a model property
+	// independent of the context window: the controller chooses the reserve
+	// per plan type and narrows it on the provider's typed output-limit
+	// errors (classified below as model_output_limit_exceeded), so this only
+	// enforces the sanity bounds. Deriving the floor from the window rejected
+	// models whose context was fine: a 1.1M-token window demanded a 220k
+	// completion the model's output cap refused, and the swarm-controller
+	// adapter's 4k validation probe could not activate any window above 20k.
+	return outputReserveTokens >= minimumOutputReserveTokens && outputReserveTokens < modelWindowTokens
 }
 
 func swarmboardTurnResponseFormat(strict bool) *openaiapi.ResponseFormat {

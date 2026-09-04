@@ -485,15 +485,18 @@ func TestSingleShotBotUsesOnlyValidOutputReserve(t *testing.T) {
 		outputReserve int
 		wantCall      bool
 	}{
-		{name: "8k exact cap", window: 8_000, outputReserve: 4_000, wantCall: true},
-		{name: "32k exact cap", window: 32_000, outputReserve: 6_400, wantCall: true},
-		{name: "200k keeps a full fifth", window: 200_000, outputReserve: 40_000, wantCall: true},
+		{name: "8k at the floor", window: 8_000, outputReserve: 4_000, wantCall: true},
+		{name: "32k at the floor", window: 32_000, outputReserve: 4_000, wantCall: true},
+		{name: "32k above the floor", window: 32_000, outputReserve: 6_400, wantCall: true},
+		{name: "200k accepts a capped reserve", window: 200_000, outputReserve: 8_192, wantCall: true},
+		{name: "200k accepts a large reserve", window: 200_000, outputReserve: 40_000, wantCall: true},
+		{name: "1M window does not scale the floor", window: 1_000_000, outputReserve: 4_000, wantCall: true},
 		{name: "zero", window: 32_000, outputReserve: 0},
 		{name: "negative", window: 32_000, outputReserve: -1},
-		{name: "below 8k minimum", window: 8_000, outputReserve: 3_999},
-		{name: "below 32k minimum", window: 32_000, outputReserve: 6_399},
-		{name: "200k rejects a capped reserve", window: 200_000, outputReserve: 8_192},
+		{name: "below the floor at 8k", window: 8_000, outputReserve: 3_999},
+		{name: "below the floor at 1M", window: 1_000_000, outputReserve: 3_999},
 		{name: "reaches window", window: 32_000, outputReserve: 32_000},
+		{name: "floor equals window", window: 4_000, outputReserve: 4_000},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var calls atomic.Int32
