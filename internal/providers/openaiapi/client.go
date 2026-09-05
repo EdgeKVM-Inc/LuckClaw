@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,10 +22,16 @@ import (
 type Client struct {
 	APIKey                string
 	APIBase               string
+	Provider              string
 	ExtraHeaders          map[string]string
 	HTTPClient            *http.Client
 	SupportsPromptCaching bool // When true, inject cache_control for system/tools (Anthropic-style)
 }
+
+// maxChatResponseBodyBytes bounds the full provider JSON envelope. 512 KiB is
+// sufficient for the adapter's legal 64 KiB nested response even when JSON
+// escaping expands every byte, while remaining suitable for embedded hosts.
+const maxChatResponseBodyBytes = 512 * 1024
 
 type Message struct {
 	Role       string     `json:"role"`
@@ -48,6 +58,17 @@ type ToolCall struct {
 	ID       string       `json:"id"`
 	Type     string       `json:"type"`
 	Function ToolFunction `json:"function"`
+}
+
+type ResponseFormat struct {
+	Type       string                    `json:"type"`
+	JSONSchema *JSONSchemaResponseFormat `json:"json_schema,omitempty"`
+}
+
+type JSONSchemaResponseFormat struct {
+	Name   string         `json:"name"`
+	Strict bool           `json:"strict"`
+	Schema map[string]any `json:"schema"`
 }
 
 type ContentPart interface {
@@ -115,6 +136,7 @@ type ChatRequest struct {
 	MaxTokens       int              `json:"max_tokens,omitempty"`
 	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
 	PromptCacheKey  string           `json:"prompt_cache_key,omitempty"` // Codex-style cache key (SHA256 of messages)
+	ResponseFormat  *ResponseFormat  `json:"response_format,omitempty"`
 }
 
 type ChatResponse struct {
@@ -123,6 +145,7 @@ type ChatResponse struct {
 		Message      struct {
 			Content          string     `json:"content"`
 			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			Refusal          string     `json:"refusal,omitempty"`
 			ToolCalls        []ToolCall `json:"tool_calls"`
 		} `json:"message"`
 	} `json:"choices"`
@@ -136,6 +159,7 @@ type ChatResponse struct {
 type ChatResult struct {
 	Content          string
 	ReasoningContent string
+	Refusal          string
 	ToolCalls        []ToolCall
 	FinishReason     string
 	Usage            struct {
@@ -206,16 +230,76 @@ func SanitizeEmptyContent(msgs []Message) []Message {
 // NewHTTPClientWithProxy creates an HTTP client with proxy configuration from WebToolsConfig.
 // If webCfg is nil or has no proxy settings, falls back to http.ProxyFromEnvironment.
 func NewHTTPClientWithProxy(webCfg *config.WebToolsConfig, timeout time.Duration) *http.Client {
-	transport := &http.Transport{}
+	return newHTTPClientWithProxy(webCfg, timeout, providerRootCAs())
+}
+
+func newHTTPClientWithProxy(webCfg *config.WebToolsConfig, timeout time.Duration, roots *x509.CertPool) *http.Client {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{RootCAs: roots},
+	}
 	if webCfg != nil && (webCfg.HTTPProxy != "" || webCfg.HTTPSProxy != "" || webCfg.AllProxy != "") {
 		transport.Proxy = webCfg.ProxyFunc()
 	} else {
 		transport.Proxy = http.ProxyFromEnvironment
 	}
 	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
+		Timeout:       timeout,
+		Transport:     transport,
+		CheckRedirect: rejectProviderRedirect,
 	}
+}
+
+func providerRootCAs() *x509.CertPool {
+	return loadProviderRootCAs(x509.SystemCertPool, os.ReadFile, providerCACandidates())
+}
+
+func providerCACandidates() []string {
+	return providerCACandidatesWithGlob(os.Getenv("SSL_CERT_FILE"), filepath.Glob)
+}
+
+func providerCACandidatesWithGlob(
+	explicitBundle string,
+	glob func(string) ([]string, error),
+) []string {
+	candidates := make([]string, 0, 8)
+	if explicit := strings.TrimSpace(explicitBundle); explicit != "" {
+		candidates = append(candidates, explicit)
+	}
+	for _, pattern := range []string{
+		"/usr/lib/python*/site-packages/certifi/cacert.pem",
+		"/usr/local/lib/python*/site-packages/certifi/cacert.pem",
+	} {
+		matches, err := glob(pattern)
+		if err == nil {
+			candidates = append(candidates, matches...)
+		}
+	}
+	return candidates
+}
+
+func loadProviderRootCAs(
+	systemPool func() (*x509.CertPool, error),
+	readFile func(string) ([]byte, error),
+	candidates []string,
+) *x509.CertPool {
+	pool, err := systemPool()
+	if pool != nil && len(pool.Subjects()) > 0 {
+		return pool
+	}
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	for _, candidate := range candidates {
+		pem, readErr := readFile(candidate)
+		if readErr == nil {
+			pool.AppendCertsFromPEM(pem)
+		}
+	}
+	return pool
+}
+
+func rejectProviderRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) {
@@ -231,7 +315,11 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) 
 		} else {
 			transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
 		}
-		c.HTTPClient = &http.Client{Timeout: 120 * time.Second, Transport: transport}
+		c.HTTPClient = &http.Client{
+			Timeout:       120 * time.Second,
+			Transport:     transport,
+			CheckRedirect: rejectProviderRedirect,
+		}
 	}
 
 	body, err := c.buildRequestBody(req)
@@ -261,9 +349,9 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) 
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := readChatResponseBody(resp)
 	if err != nil {
-		return ChatResult{}, ClassifyNetworkError(err)
+		return ChatResult{}, err
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -284,6 +372,7 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) 
 	result := ChatResult{
 		Content:          msg.Content,
 		ReasoningContent: msg.ReasoningContent,
+		Refusal:          msg.Refusal,
 		ToolCalls:        msg.ToolCalls,
 		FinishReason:     choice.FinishReason,
 	}
@@ -293,6 +382,27 @@ func (c *Client) Chat(ctx context.Context, req ChatRequest) (ChatResult, error) 
 	return result, nil
 }
 
+func readChatResponseBody(response *http.Response) ([]byte, error) {
+	if response.ContentLength > maxChatResponseBodyBytes {
+		return nil, oversizedChatResponseError()
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxChatResponseBodyBytes+1))
+	if err != nil {
+		return nil, ClassifyNetworkError(err)
+	}
+	if len(body) > maxChatResponseBodyBytes {
+		return nil, oversizedChatResponseError()
+	}
+	return body, nil
+}
+
+func oversizedChatResponseError() error {
+	return &FailoverError{
+		Reason:  ReasonFormat,
+		Wrapped: fmt.Errorf("response body exceeds %d-byte limit", maxChatResponseBodyBytes),
+	}
+}
+
 // buildRequestBody marshals the request and optionally injects cache_control
 // for Anthropic-style prompt caching when SupportsPromptCaching is true.
 func (c *Client) buildRequestBody(req ChatRequest) ([]byte, error) {
@@ -300,15 +410,38 @@ func (c *Client) buildRequestBody(req ChatRequest) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !c.SupportsPromptCaching {
+	currentOpenAIFields := c.usesCurrentOpenAIChatFields(req.Model)
+	if !c.SupportsPromptCaching && !currentOpenAIFields {
 		return body, nil
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return body, nil
 	}
+	if currentOpenAIFields {
+		delete(raw, "temperature")
+		if req.MaxTokens > 0 {
+			delete(raw, "max_tokens")
+			raw["max_completion_tokens"] = req.MaxTokens
+		}
+	}
+	if !c.SupportsPromptCaching {
+		return json.Marshal(raw)
+	}
 	applyCacheControl(raw)
 	return json.Marshal(raw)
+}
+
+func (c *Client) usesCurrentOpenAIChatFields(model string) bool {
+	if !strings.EqualFold(strings.TrimSpace(c.Provider), "openai") {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	normalized = strings.TrimPrefix(normalized, "openai/")
+	return strings.HasPrefix(normalized, "gpt-5") ||
+		strings.HasPrefix(normalized, "o1") ||
+		strings.HasPrefix(normalized, "o3") ||
+		strings.HasPrefix(normalized, "o4")
 }
 
 // applyCacheControl injects cache_control: {"type": "ephemeral"} into system

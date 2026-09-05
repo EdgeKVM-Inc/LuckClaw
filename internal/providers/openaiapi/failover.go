@@ -16,7 +16,10 @@ const (
 	ReasonTimeout       FailoverReason = "timeout"
 	ReasonServer        FailoverReason = "server"
 	ReasonFormat        FailoverReason = "format"
+	ReasonBadParameter  FailoverReason = "bad_parameter"
+	ReasonOutputCap     FailoverReason = "output_cap"
 	ReasonModelNotFound FailoverReason = "model_not_found"
+	ReasonContextWindow FailoverReason = "context_window"
 	ReasonUnknown       FailoverReason = "unknown"
 )
 
@@ -53,8 +56,14 @@ func (e *FailoverError) UserMessage() string {
 		return "Request timed out. Please try again."
 	case ReasonServer:
 		return "The AI service is temporarily unavailable. Please try again later."
+	case ReasonBadParameter:
+		return "The provider rejected a request parameter that this model does not support (for example `temperature`). Adjust the request options or switch model."
+	case ReasonOutputCap:
+		return "The requested output tokens exceed this model's output limit. Lower the configured context window or output reserve."
 	case ReasonModelNotFound:
 		return "Model not found or not available for this provider. Use /model to switch model, or run `luckclaw models list` to see available models."
+	case ReasonContextWindow:
+		return "The configured model context window is too small for this request."
 	default:
 		return e.Error()
 	}
@@ -80,14 +89,18 @@ func ClassifyHTTPError(status int, body string) *FailoverError {
 
 	switch {
 	case status == 429:
-		fe.Reason = ReasonRateLimit
+		if classifyByBody(body) == ReasonBilling {
+			fe.Reason = ReasonBilling
+		} else {
+			fe.Reason = ReasonRateLimit
+		}
 	case status == 401 || status == 403:
 		fe.Reason = ReasonAuth
 	case status == 402:
 		fe.Reason = ReasonBilling
 	case status == 408:
 		fe.Reason = ReasonTimeout
-	case status == 400:
+	case status == 400 || status == 404 || status == 413:
 		fe.Reason = classifyByBody(body)
 	case status >= 500:
 		fe.Reason = ReasonServer
@@ -119,7 +132,7 @@ func ClassifyNetworkError(err error) *FailoverError {
 	case strings.Contains(msg, "connection refused"),
 		strings.Contains(msg, "connection reset"),
 		strings.Contains(msg, "eof"):
-		fe.Reason = ReasonServer
+		fe.Reason = ReasonUnknown
 	default:
 		fe.Reason = ReasonUnknown
 	}
@@ -134,10 +147,22 @@ func classifyByBody(body string) FailoverReason {
 	case strings.Contains(lower, "quota") || strings.Contains(lower, "billing") || strings.Contains(lower, "insufficient_quota"):
 		return ReasonBilling
 	case strings.Contains(lower, "model not exist") || strings.Contains(lower, "model_not_found") ||
-		strings.Contains(lower, "model does not exist") || strings.Contains(lower, "model not found"):
+		strings.Contains(lower, "model does not exist") || strings.Contains(lower, "model not found") ||
+		strings.Contains(lower, "not_found_error"):
 		return ReasonModelNotFound
 	case strings.Contains(lower, "context length") || strings.Contains(lower, "too long") || strings.Contains(lower, "maximum context"):
-		return ReasonFormat
+		return ReasonContextWindow
+	case strings.Contains(lower, "max_tokens") &&
+		(strings.Contains(lower, "maximum allowed") || strings.Contains(lower, "at most") ||
+			strings.Contains(lower, "too large")):
+		// Anthropic: "max_tokens: X > Y, which is the maximum allowed number
+		// of output tokens for <model>". OpenAI: "max_tokens is too large:
+		// X. This model supports at most Y completion tokens".
+		return ReasonOutputCap
+	case strings.Contains(lower, "deprecated") || strings.Contains(lower, "unsupported parameter") ||
+		strings.Contains(lower, "unsupported_parameter") || strings.Contains(lower, "unsupported value") ||
+		strings.Contains(lower, "unknown parameter"):
+		return ReasonBadParameter
 	default:
 		return ReasonFormat
 	}

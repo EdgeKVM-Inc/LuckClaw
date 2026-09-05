@@ -130,6 +130,7 @@ func NewBot(cfgPath string, options ...BotOption) (*Bot, error) {
 	provider := &openaiapi.Client{
 		APIKey:                selected.APIKey,
 		APIBase:               selected.APIBase,
+		Provider:              selected.Name,
 		ExtraHeaders:          selected.ExtraHeaders,
 		SupportsPromptCaching: config.SupportsPromptCaching(selected.Name),
 		HTTPClient:            openaiapi.NewHTTPClientWithProxy(&cfg.Tools.Web, 120*time.Second),

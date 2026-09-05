@@ -75,6 +75,7 @@ func NewCmd() *cobra.Command {
 					clients = append(clients, &openaiapi.Client{
 						APIKey:                p.APIKey,
 						APIBase:               p.APIBase,
+						Provider:              p.Name,
 						ExtraHeaders:          headers,
 						SupportsPromptCaching: config.SupportsPromptCaching(p.Name),
 						HTTPClient:            openaiapi.NewHTTPClientWithProxy(&cfg.Tools.Web, 120*time.Second),
@@ -92,6 +93,7 @@ func NewCmd() *cobra.Command {
 				chatClient = &openaiapi.Client{
 					APIKey:                selected.APIKey,
 					APIBase:               selected.APIBase,
+					Provider:              selected.Name,
 					ExtraHeaders:          headers,
 					SupportsPromptCaching: config.SupportsPromptCaching(selected.Name),
 					HTTPClient:            openaiapi.NewHTTPClientWithProxy(&cfg.Tools.Web, 120*time.Second),
